@@ -16,15 +16,15 @@
 
 /**
  * Given a 1D textures containing wave function and potential values, draw those
- * values onto a canvas with the texture coordinates along the x axis and the function
- * values along the y axis. Attach the canvas to the parent.
+ * values onto a canvas with the texture coordinates along the x-axis and the function
+ * values along the y-axis. Attach the canvas to the parent.
  */
 function SchrodingerRenderer(gpgpUtility_, parent_, psiColor_, reColor_, imColor_, vColor_, xResolution_, yResolution_, potential_, psiMax_, vMax_)
 {
   "use strict";
 
   var gpgpUtility;
-  // Color for the imiginary part of psi, 0,0,0,0 => nothing drawn.
+  // Color for the imaginary part of psi, 0,0,0,0 => nothing drawn.
   var imColor;
   var imColorHandle;
   var parent;
@@ -37,7 +37,7 @@ function SchrodingerRenderer(gpgpUtility_, parent_, psiColor_, reColor_, imColor
   var psiColorHandle;
   var psiMax;
   var psiMaxHandle;
-  // real psi componet color, 0,0,0,0 => nothing drawn.
+  // real psi component color, 0,0,0,0 => nothing drawn.
   var reColor;
   var reColorHandle;
   var waveFunction;

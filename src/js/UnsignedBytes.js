@@ -138,7 +138,7 @@ function UnsignedBytes(gpgpUtility_)
 
   /**
    * Invoke to clean up resources specific to this program. We leave the texture
-   * and frame buffer intact as they are used in followon calculations.
+   * and frame buffer intact as they are used in follow-on calculations.
    */
   this.done = function ()
   {
@@ -148,4 +148,4 @@ function UnsignedBytes(gpgpUtility_)
   gpgpUtility = gpgpUtility_;
   gl          = gpgpUtility.getGLContext();
   program     = this.createProgram(gl);
-};
+}

@@ -188,7 +188,7 @@ function Schrodinger(gpgpUtility_, xResolution_, length_, dt_)
 
   /**
    * Invoke to clean up resources specific to this program. We leave the texture
-   * and frame buffer intact as they are used in followon calculations.
+   * and frame buffer intact as they are used in follow-on calculations.
    */
   this.done = function ()
   {
@@ -204,4 +204,4 @@ function Schrodinger(gpgpUtility_, xResolution_, length_, dt_)
   textures    = new Array(2);
   step        = 0;
   xResolution = xResolution_;
-};
+}

@@ -71,7 +71,7 @@ function MurBoundary(gpgpUtility_, xResolution_, length_, dt_, vp_)
                          + "uniform float vp;"
                          // At time t - delta t waveFunction.r is the real part waveFunction.g is the imaginary part.
                          + "uniform sampler2D oldWaveFunction;"
-                         // The number of points along the x axis.
+                         // The number of points along the x-axis.
                          + "uniform int xResolution;"
                          + ""
                          // At time t waveFunction.r is the real part waveFunction.g is the imaginary part.
@@ -168,7 +168,7 @@ function MurBoundary(gpgpUtility_, xResolution_, length_, dt_, vp_)
   };
 
   /**
-   * Return verticies for the boundary. If they don't yet exist,
+   * Return vertices for the boundary. If they don't yet exist,
    * they are created and loaded with the appropriate geometry.
    * If they already exist, they are bound and returned.
    *
@@ -192,7 +192,7 @@ function MurBoundary(gpgpUtility_, xResolution_, length_, dt_, vp_)
 
 
   /**
-   * Rederes points at the boundary of the simulation to compute the boundary
+   * Renders points at the boundary of the simulation to compute the boundary
    * values using the one way wave equations
    */
   this.render = function()
@@ -213,7 +213,7 @@ function MurBoundary(gpgpUtility_, xResolution_, length_, dt_, vp_)
     gl.uniform1f(lengthHandle,        length);
     gl.uniform1f(phaseVelocityHandle, phaseVelocity);
 
-    // Texture samplers, carried over from the main comoute step
+    // Texture samplers, carried over from the main compute step
     gl.uniform1i(oldWaveFunctionHandle, 1);
 
     gl.uniform1i(waveFunctionHandle, 2);
@@ -227,7 +227,7 @@ function MurBoundary(gpgpUtility_, xResolution_, length_, dt_, vp_)
 
   /**
    * Invoke to clean up resources specific to this program. We leave the texture
-   * and frame buffer intact as they are used in followon calculations.
+   * and frame buffer intact as they are used in follow-on calculations.
    */
   this.done = function ()
   {
@@ -241,4 +241,4 @@ function MurBoundary(gpgpUtility_, xResolution_, length_, dt_, vp_)
   length        = length_;
   phaseVelocity = vp_;
   xResolution   = xResolution_;
-};
+}

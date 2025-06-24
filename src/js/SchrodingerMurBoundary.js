@@ -60,7 +60,7 @@ function SchrodingerMurBoundary(gpgpUtility_, xResolution_, length_, E_, dt_)
                                + "uniform float length;"
                                // At time t - delta t waveFunction.r is the real part waveFunction.g is the imaginary part.
                                + "uniform sampler2D oldWaveFunction;"
-                               // The number of points along the x axis.
+                               // The number of points along the x-axis.
                                + "uniform int xResolution;"
                                + ""
                                // At time t waveFunction.r is the real part waveFunction.g is the imaginary part.
@@ -120,20 +120,28 @@ function SchrodingerMurBoundary(gpgpUtility_, xResolution_, length_, E_, dt_)
   };
 
   /**
+   * Set whether ot not to use the boundary conditions. If true, the boundary conditions are
+   * enforced, if false, they are ignored.
    *
+   * @param {boolean} enabled True if boundary conditions are enabled, false if not.
    */
   this.setBCEnabled = function(enabled)
   {
     bcEnabled = enabled;
   }
 
-  this.getBCEnabled = function()
+  /**
+   * Check whether boundary conditions are enabled. Returns true is they are enabled, false if not.
+   *
+   * @returns {boolean} True if boundary conditions are enabled, false if not.
+   */
+  this.isBCEnabled = function()
   {
     return bcEnabled;
   }
 
   /**
-   * Setup the initial values for textures. Two for values of the wave function,
+   * Set up the initial values for textures. Two for values of the wave function,
    * and a third as a render target.
    */
   this.setInitialTextures = function(texture0, texture1, texture2)
@@ -239,7 +247,7 @@ function SchrodingerMurBoundary(gpgpUtility_, xResolution_, length_, E_, dt_)
 
   /**
    * Invoke to clean up resources specific to this program. We leave the texture
-   * and frame buffer intact as they are used in followon calculations.
+   * and frame buffer intact as they are used in follow-on calculations.
    */
   this.done = function ()
   {

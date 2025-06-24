@@ -67,7 +67,7 @@ function Schrodinger(gpgpUtility_, xResolution_, length_, dt_)
                          + "uniform float length;"
                          // At time t - delta t waveFunction.r is the real part waveFunction.g is the imaginary part.
                          + "uniform sampler2D oldWaveFunction;"
-                         // The number of points along the x axis.
+                         // The number of points along the x-axis.
                          + "uniform int xResolution;"
                          + ""
                          // At time t waveFunction.r is the real part waveFunction.g is the imaginary part.
@@ -113,7 +113,7 @@ function Schrodinger(gpgpUtility_, xResolution_, length_, dt_)
   };
 
   /**
-   * Setup the initial values for textures. Two for values of the wave function,
+   * Set up the initial values for textures. Two for values of the wave function,
    * and a third as a render target.
    */
   this.setInitialTextures = function(texture0, texture1, texture2)
@@ -174,7 +174,7 @@ function Schrodinger(gpgpUtility_, xResolution_, length_, dt_)
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     // Step cycles though 0, 1, 2
-    // Controld cycling over old, current and render target uses of textures
+    // Cycle over old, current and render target uses of textures
     step = (step+1)%3;
   };
 
@@ -219,7 +219,7 @@ function Schrodinger(gpgpUtility_, xResolution_, length_, dt_)
 
   /**
    * Invoke to clean up resources specific to this program. We leave the texture
-   * and frame buffer intact as they are used in followon calculations.
+   * and frame buffer intact as they are used in follow-on calculations.
    */
   this.done = function ()
   {
@@ -235,4 +235,4 @@ function Schrodinger(gpgpUtility_, xResolution_, length_, dt_)
   textures    = new Array(2);
   step        = 0;
   xResolution = xResolution_;
-};
+}

@@ -17,6 +17,10 @@
 window.vizit         = window.vizit         || {};
 window.vizit.utility = window.vizit.utility || {};
 
+/**
+ * @typedef {Number} Integer
+ */
+
 (function (ns)
 {
   "use strict";
@@ -51,8 +55,8 @@ window.vizit.utility = window.vizit.utility || {};
       * Create a canvas for computational use. Computations don't
       * require attachment to the DOM.
       *
-      * @param {integer} canvasWidth The width (x-dimension) of the problem domain.
-      * @param {integer} canvasHeight The height (y-dimension) of the problem domain.
+      * @param {Integer} canvasWidth The width (x-dimension) of the problem domain.
+      * @param {Integer} canvasHeight The height (y-dimension) of the problem domain.
       *
       * @returns {HTMLCanvasElement} A canvas with the given height and width.
       */
@@ -111,7 +115,7 @@ window.vizit.utility = window.vizit.utility || {};
      };
 
      /**
-      * Return verticies for the standard geometry. If they don't yet exist,
+      * Return vertices for the standard geometry. If they don't yet exist,
       * they are created and loaded with the standard geometry. If they already
       * exist, they are bound and returned.
       *
@@ -155,7 +159,7 @@ window.vizit.utility = window.vizit.utility || {};
      };
 
      /**
-      * Set a height and width for the simulation steps when they are different than
+      * Set a height and width for the simulation steps when they are different from
       * the canvas height and width.
       *
       * @param {integer} height The height of the simulation.
@@ -169,8 +173,8 @@ window.vizit.utility = window.vizit.utility || {};
 
      this.getComputeContext = function()
      {
-       if (problemWidth != canvasWidth
-           || problemHeight != canvasHeight)
+       if (problemWidth !== canvasWidth
+           || problemHeight !== canvasHeight)
        {
          gl.viewport(0, 0, problemWidth, problemHeight);
        }
@@ -179,8 +183,8 @@ window.vizit.utility = window.vizit.utility || {};
 
      this.getRenderingContext = function()
      {
-       if (problemWidth != canvasWidth
-           || problemHeight != canvasHeight)
+       if (problemWidth !== canvasWidth
+           || problemHeight !== canvasHeight)
        {
          gl.viewport(0, 0, canvasWidth, canvasHeight);
        }
@@ -220,7 +224,6 @@ window.vizit.utility = window.vizit.utility || {};
       * Create a width x height texture of the given type for computation.
       * Width and height are usually equal, and must be powers of two.
       *
-      * @param {WebGLRenderingContext} The WebGL context for which we will create the texture.
       * @param {integer} width The width of the texture in pixels. Normalized to s in texture coordinates.
       * @param {integer} height The height of the texture in pixels. Normalized to t in texture coordinates.
       * @param {number} type A valid texture type. FLOAT, UNSIGNED_BYTE, etc.
@@ -261,7 +264,6 @@ window.vizit.utility = window.vizit.utility || {};
       * Create a default width and height texture of the given type for computation.
       * Width and height must be powers of two.
       *
-      * @param {WebGLRenderingContext} The WebGL context for which we will create the texture.
       * @param {number} type A valid texture type. FLOAT, UNSIGNED_BYTE, etc.
       * @param {number[] | null} data Either texture data, or null to allocate the texture but leave the texels undefined.
       *
@@ -326,7 +328,7 @@ window.vizit.utility = window.vizit.utility || {};
            value = false;
            break;
          case gl.FRAMEBUFFER_INCOMPLETE_DIMENSIONS:
-           message = "Framebuffer incomplete (missmatched) dimensions";
+           message = "Framebuffer incomplete (mismatched) dimensions";
            value = false;
            break;
          case gl.FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
@@ -343,8 +345,8 @@ window.vizit.utility = window.vizit.utility || {};
      /**
       * Create and compile a vertex or fragment shader as given by the shader type.
       *
-      * @param {string} The GLSL source for the shader.
-      * @param {gl.FRAGMENT_SHADER|gl.VERTEX_SHADER} The type of shader.
+      * @param {string}                              shaderSource The GLSL source for the shader.
+      * @param {gl.FRAGMENT_SHADER|gl.VERTEX_SHADER} shaderType   The type of shader.
       * 
       * @returns {WebGLShader} A compiled shader of the given type.
       */
@@ -475,7 +477,7 @@ window.vizit.utility = window.vizit.utility || {};
       *
       * @param {WebGLProgram} program   The WebGL program, compiled shaders, containing the attribute.
       *
-      * @param {String}       uniform   The name of the uniform in the given program.
+      * @param {String}       name      The name of the uniform in the given program.
       *
       * @returns WebGLHandlesContextLoss
       */

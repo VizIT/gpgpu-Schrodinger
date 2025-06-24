@@ -111,7 +111,7 @@ function MatrixInitializer(gpgpUtility_)
 
   /**
    * Invoke to clean up resources specific to this program. We leave the texture
-   * and frame buffer intact as they are used in followon calculations.
+   * and frame buffer intact as they are used in follow-on calculations.
    */
   this.done = function ()
   {
@@ -150,7 +150,7 @@ function MatrixInitializer(gpgpUtility_)
     var expected;
     var passed;
 
-    // Error tollerance in calculations
+    // Error tolerance in calculations
     eps = 1.0E-20;
 
     // One each for RGBA component of a pixel
@@ -179,4 +179,4 @@ function MatrixInitializer(gpgpUtility_)
   gpgpUtility = gpgpUtility_;
   gl          = gpgpUtility.getGLContext();
   program     = this.createProgram(gl);
-};
+}
