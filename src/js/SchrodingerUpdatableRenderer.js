@@ -23,15 +23,27 @@ class SchrodingerRenderer
 {
     #schrodinger;
     #device;
+
+    // The plot parameters and their offsets for updating them.
     #reColor;
+    #reColorOffset;
     #imColor;
+    #imColorOffset;
     #psiColor;
+    #psiColorOffset;
     #psiMax;
+    #psiMaxOffset;
     #vColor;
+    #vColorOffset;
     #vMax;
+    #vMaxOffset;
     #E;
+    #EOffset;
     #yResolution;
+    #yResolutionOffset;
     #width;
+    #widthOffset;
+
     #parametersBindGroup;
     #parametersBindGroupLayout;
     #plotParametersBuffer;
@@ -47,7 +59,8 @@ class SchrodingerRenderer
 
     /**
      * Build a Schrödinger wave function visualization with the given parameters.
-     * @param {Schrodinger} schrodinger  A Schrodinger FDTD instance
+     * @param {Schrodinger} schrodinger  A Schrodinger FDTD instance from which we retrieve the device
+     *                                   and other parameters.
      * @param {GPUDevice} device         The device in use for the simulation, to allow buffer reuse.
      * @param {String} canvasID          The HTML ID for the canvas we render to.
      * @param {GPUBindGroup} parametersBindGroup The bind group for the Schrödinger equation parameters,
@@ -89,6 +102,234 @@ class SchrodingerRenderer
     }
 
     /**
+     * Get the simulation parameters bind group.
+     *
+     * @returns {GPUBindGroup} parametersBindGroup The bind group for the Schrödinger equation parameters.
+     */
+    getParametersBindGroup()
+    {
+        return this.#parametersBindGroup;
+    }
+
+    /**
+     * Set the bind group for the Schrödinger equation parameters, carried over from the solver.
+     *
+     * @param {GPUBindGroup} parametersBindGroup The bind group for the Schrödinger equation parameters.
+     */
+    setParametersBindGroup(parametersBindGroup)
+    {
+        this.#parametersBindGroup = parametersBindGroup;
+        return this;
+    }
+
+    /**
+     * Get the color for the real part of the wave function.
+     *
+     * @returns {Array<Number>} The r, g, b, a color for the real part of the wave function.
+     */
+    getReColor()
+    {
+        return this.#reColor;
+    }
+
+    /**
+     * Set the color for the real part of the wave function.
+     *
+     * @param {Array<Number>} reColor The r, g, b, a color for the real part of the wave function.
+     * @returns {SchrodingerRenderer}
+     */
+    setReColor(reColor)
+    {
+        this.#reColor = reColor;
+        this.#device.queue.writeBuffer(this.#plotParametersBuffer, this.#reColorOffset, new Float32Array(reColor), 0, 4);
+        return this;
+    }
+
+    /**
+     * Get the color for the imaginary part of the wave function.
+     *
+     * @returns {Array<Number>} The r, g, b, a color for the imaginary part of the wave function.
+     */
+    getImColor()
+    {
+        return this.#imColor;
+    }
+
+    /**
+     * Set the color for the imaginary part of the wave function.
+     *
+     * @param imColor {Array<Number>} The r, g, b, a color for the imaginary part of the wave function.
+     * @returns {SchrodingerRenderer}
+     */
+    setImColor(imColor)
+    {
+        this.#imColor = imColor;
+        this.#device.queue.writeBuffer(this.#plotParametersBuffer, this.#imColorOffset, new Float32Array(imColor), 0, 4);
+        return this;
+    }
+
+    /**
+     * Get the color for the Ψ<sup>*</sup>Ψ plot.
+     *
+     * @returns {Array<Number>} The r, g, b, a color for the square of the wave function.
+     */
+    getPsiColor()
+    {
+        return this.#psiColor;
+    }
+
+    /**
+     * Set the color for the Ψ<sup>*</sup>Ψ plot.
+     *
+     * @param {Array<Number>} psiColor The r, g, b, a color for the square of the wave function.
+     * @returns {SchrodingerRenderer}
+     */
+    setPsiColor(psiColor)
+    {
+        this.#psiColor = psiColor;
+        this.#device.queue.writeBuffer(this.#plotParametersBuffer, this.#psiColorOffset, new Float32Array(psiColor), 0, 4);
+        return this;
+    }
+
+    /**
+     * Get the max value for Ψ values on this plot. This is the scale for psi, rePsi, and imPsi plots.
+     *
+     * @returns {Number} The scale for psi, rePsi, and imPsi plots.
+     */
+    getPsiMax()
+    {
+        return this.#psiMax;
+    }
+
+    /**
+     * Set the max value for Ψ values on this plot. This is the scale for psi, rePsi, and imPsi plots.
+     *
+     * @param {Number} psiMax The scale for psi, rePsi, and imPsi plots.
+     * @returns {SchrodingerRenderer}
+     */
+    setPsiMax(psiMax)
+    {
+        this.#psiMax = psiMax;
+        this.#device.queue.writeBuffer(this.#plotParametersBuffer, this.#psiMaxOffset, new Float32Array([psiMax]), 0, 1);
+        return this;
+    }
+
+    /**
+     * Get the color for the potential function plot.
+     *
+     * @returns {Array<Number>} The r, g, b, a color for the potential plot.
+     */
+    getVColor()
+    {
+        return this.#vColor;
+    }
+
+    /**
+     * Set the color for the potential function plot.
+     *
+     * @param {Array<Number>} vColor The r, g, b, a color for the potential plot.
+     * @returns {SchrodingerRenderer}
+     */
+    setVColor(vColor)
+    {
+        this.#vColor = vColor;
+        this.#device.queue.writeBuffer(this.#plotParametersBuffer, this.#vColorOffset, new Float32Array(vColor), 0, 4);
+        return this;
+    }
+
+    /**
+     * Get the expected max for the potential energy.
+     *
+     * @returns {Number} The maximum for the potential energy.
+     */
+    get vMax()
+    {
+        return this.#vMax;
+    }
+
+    /**
+     * Sets the scale for the potential energy plot. Should slightly exceed the max potential energy.
+     *
+     * @param {Number} vMax The maximum for the potential energy.
+     * @returns {SchrodingerRenderer}
+     */
+    setVMax(vMax)
+    {
+        this.#vMax = vMax;
+        this.#device.queue.writeBuffer(this.#plotParametersBuffer, this.#vMaxOffset, new Float32Array([vMax]), 0, 1);
+        return this;
+    }
+
+    /**
+     * Get the energy of the represented particle.
+     *
+     * @returns {Number} The energy of the particle.
+     */
+    getE()
+    {
+        return this.#E;
+    }
+
+    /**
+     * Set the energy of the represented particle. This is drawn as a horizontal vColor line.
+     *
+     * @param {Number} E The energy of the particle.
+     * @returns {SchrodingerRenderer}
+     */
+    setE(E)
+    {
+        this.#E = E;
+        this.#device.queue.writeBuffer(this.#plotParametersBuffer, this.#EOffset, new Float32Array([E]), 0, 1);
+        return this;
+    }
+
+    /**
+     * Get the number of pixels in the y-direction.
+     *
+     * @returns {Integer} The number of pixels along the y-axis.
+     */
+    getYResolution()
+    {
+        return this.#yResolution;
+    }
+
+    /**
+     * Set the number of pixels along the y-axis.
+     *
+     * @param {Integer} yResolution The number of pixels in the y-direction.
+     * @returns {SchrodingerRenderer}
+     */
+    setYResolution(yResolution)
+    {
+        this.#yResolution = yResolution;
+        this.#device.queue.writeBuffer(this.#plotParametersBuffer, this.#yResolutionOffset, new Float32Array([yResolution]), 0, 1);
+        return this;
+    }
+
+    /**
+     * Get the width for plotted lines.
+     *
+     * @returns {Number} The pixel width for plotted lines.
+     */
+    getWidth()
+    {
+        return this.#width;
+    }
+
+    /**
+     * Set the width for plotted lines.
+     *
+     * @param {Number} width The pixel width for plotted lines.
+     * @returns {SchrodingerRenderer}
+     */
+    setWidth(width)
+    {
+        this.#width = width;
+        this.#device.queue.writeBuffer(this.#plotParametersBuffer, this.#widthOffset, new Float32Array([width]), 0, 1);
+        return this;
+    }
+
+    /**
      * Get the plot parameters buffer for debugging.
      *
      * @returns {GPUBuffer} The plot parameters buffer.
@@ -96,6 +337,50 @@ class SchrodingerRenderer
     getPlotParametersBuffer()
     {
         return this.#plotParametersBuffer;
+    }
+
+    loadPlotParameters(mappedBuffer)
+    {
+        // Get the raw array buffer for the mapped GPU buffer
+        const plotParametersArrayBuffer = mappedBuffer.getMappedRange();
+
+        let bytesSoFar = 0;
+        this.#reColorOffset = bytesSoFar;
+        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 4).set(this.#reColor);
+        bytesSoFar += 4*Float32Array.BYTES_PER_ELEMENT;
+
+        this.#imColorOffset = bytesSoFar;
+        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 4).set(this.#imColor);
+        bytesSoFar += 4*Float32Array.BYTES_PER_ELEMENT;
+
+        this.#psiColorOffset = bytesSoFar;
+        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 4).set(this.#psiColor);
+        bytesSoFar += 4*Float32Array.BYTES_PER_ELEMENT;
+
+        this.#vColorOffset = bytesSoFar;
+        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 4).set(this.#vColor);
+        bytesSoFar += 4*Float32Array.BYTES_PER_ELEMENT;
+
+        this.#psiMaxOffset = bytesSoFar;
+        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#psiMax]);
+        bytesSoFar += Float32Array.BYTES_PER_ELEMENT;
+
+        this.#vMaxOffset = bytesSoFar;
+        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#vMax]);
+        bytesSoFar += Float32Array.BYTES_PER_ELEMENT;
+
+        this.#EOffset = bytesSoFar;
+        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#E]);
+        bytesSoFar += Float32Array.BYTES_PER_ELEMENT;
+
+        this.#yResolutionOffset = bytesSoFar;
+        new Uint32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#yResolution]);
+        bytesSoFar += Uint32Array.BYTES_PER_ELEMENT;
+
+        this.#widthOffset = bytesSoFar;
+        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#width]);
+
+        mappedBuffer.unmap();
     }
 
     /**
@@ -287,32 +572,10 @@ class SchrodingerRenderer
                 + Uint32Array.BYTES_PER_ELEMENT     // yResolution
                 + Float32Array.BYTES_PER_ELEMENT    // width
                 + 3*Float32Array.BYTES_PER_ELEMENT, // Required padding
-            usage: GPUBufferUsage.STORAGE
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
 
-        // Get the raw array buffer for the mapped GPU buffer
-        const plotParametersArrayBuffer = this.#plotParametersBuffer.getMappedRange();
-
-        let bytesSoFar = 0;
-        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 4).set(this.#reColor);
-        bytesSoFar += 4*Float32Array.BYTES_PER_ELEMENT;
-        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 4).set(this.#imColor);
-        bytesSoFar += 4*Float32Array.BYTES_PER_ELEMENT;
-        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 4).set(this.#psiColor);
-        bytesSoFar += 4*Float32Array.BYTES_PER_ELEMENT;
-        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 4).set(this.#vColor);
-        bytesSoFar += 4*Float32Array.BYTES_PER_ELEMENT;
-        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#psiMax]);
-        bytesSoFar += Float32Array.BYTES_PER_ELEMENT;
-        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#vMax]);
-        bytesSoFar += Float32Array.BYTES_PER_ELEMENT;
-        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#E]);
-        bytesSoFar += Float32Array.BYTES_PER_ELEMENT;
-        new Uint32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#yResolution]);
-        bytesSoFar += Uint32Array.BYTES_PER_ELEMENT;
-        new Float32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#width]);
-
-        this.#plotParametersBuffer.unmap();
+        this.loadPlotParameters(this.#plotParametersBuffer);
 
         this.#plotParametersBindGroup = this.#device.createBindGroup({
             layout: this.#plotParametersLayout,
@@ -370,7 +633,7 @@ class SchrodingerRenderer
                         device, canvasID, parametersBindGroup, parametersBindGroupLayout,
                         reColor, imColor, psiColor, psiMax, vColor, vMax, E,
                         yResolution, width);
-        return schrodingerRenderer.init();
+        return await schrodingerRenderer.init();
     }
 
     /**
@@ -387,7 +650,7 @@ class SchrodingerRenderer
      *
      * @param {GPUBuffer } waveFunctionBuffer
      */
-    render(waveFunctionBuffer)
+    async render(waveFunctionBuffer)
     {
         const bindGroupLayout2 = this.#device.createBindGroupLayout({
             label: "Wave function layout",

@@ -26,6 +26,8 @@ import {WebGPUCompute} from "./WebGPUCompute.js";
  * @property {Number} #dt The time step between the wave function and its updated version.
  * @property {Number} #length The physical length of this simulation.
  * @property {Integer} #xResolution The number of spatial steps in the wave function representation.
+ * @property {Array<Number>} #potential   An array of potential values, array elements correspond to physical locations
+ *                                        just as the wave function arrays.
  * @property {Boolean} #running Whether the simulation is allowed to run. Setting this to false halts the simulation.
  * @property {GPUBuffer} #parametersBuffer The FDTD parameters buffer.
  * @property {GPUBindGroup} #parametersBindGroup The bind group for the parameters buffer.
@@ -42,6 +44,7 @@ class Schrodinger
   #dt;
   #length;
   #xResolution;
+  #potential;
   #running;
   #parametersBuffer;
   #parametersBindGroup;
@@ -56,18 +59,21 @@ class Schrodinger
    * Build a Schrödinger equation integrator with the given parameters.
    *
    * @param {Number}        dt          The Δt between iterations of the wave function in natural units of time.
-   * @param {Integer}       xResolution The size of the wave function arrays, the number of spatial steps
-   *                                    on our 1D grid.
+   * @param {Integer}       xResolution The size of the potential and wave function arrays, the number of spatial
+   *                                    steps on our 1D grid.
    * @param {Number}        length      The characteristic length for the problem in terms of natural units.
+   * @param {Array<Number>} potential   An array of potential values, array elements correspond to physical locations
+   *                                    just as the wave function arrays.
    * @param {Boolean}       debug       The debug option for this execution of the FDTD solver. Enabling this
-   *                                    makes the wave function buffers copyable, potentially having a
-   *                                    performance impact. Defaults to false.
+   *                                    makes the wave function and potential buffers copyable, potentially having
+   *                                    a performance impact. Defaults to false.
    */
-  constructor(dt, xResolution, length, debug=false)
+  constructor(dt, xResolution, length, potential, debug=false)
   {
     this.#dt = dt;
     this.#xResolution = xResolution;
     this.#length = length;
+    this.#potential = potential;
     this.#debug = debug;
   }
 
@@ -82,18 +88,6 @@ class Schrodinger
   }
 
   /**
-   * Set the FDTD time step.
-   *
-   * @param {Number} dt The new time step between the wave function and its updated version.
-   * @returns {Schrodinger}
-   */
-  setTimeStep(dt)
-  {
-    this.#dt = dt;
-    return this;
-  }
-
-  /**
    * Get the number of array elements, or the number of spatial steps, in the wave function representation.
    *
    * @returns {Number} The number of spatial steps in the wave function representation.
@@ -101,18 +95,6 @@ class Schrodinger
   getXResolution()
   {
     return this.#xResolution;
-  }
-
-  /**
-   * Set the number of array elements, or the number of spatial steps, in the wave function representation.
-   *
-   * @param {Integer} xResolution The number of spatial steps in the wave function representation.
-   * @returns {Schrodinger} This object with the new resolution set.
-   */
-  setXResolution(xResolution)
-  {
-    this.#xResolution = xResolution;
-    return this;
   }
 
   /**
@@ -126,15 +108,13 @@ class Schrodinger
   }
 
   /**
-   * Get the physical length of this simulation.
+   * Get the potential on our grid.
    *
-   * @param {Number} length The physical length of this simulation.
-   * @returns {Schrodinger}
+   * @returns {Array<Number>} An array of potential values on our grid.
    */
-  setLength(length)
+  getPotential()
   {
-    this.#length = length;
-    return this;
+    return this.#potential;
   }
 
   /**
@@ -160,7 +140,7 @@ class Schrodinger
   }
 
   /**
-   * Get a wave function buffer for display, or debugging.
+   * Get a wave function buffer for display or debugging.
    *
    * @returns {GPUBuffer} A wave function buffer.
    */
@@ -170,7 +150,7 @@ class Schrodinger
   }
 
   /**
-   * Get a wave function buffer for display, or debugging.
+   * Get a wave function buffer for display or debugging.
    *
    * @returns {GPUBuffer} A wave function buffer.
    */
@@ -180,7 +160,7 @@ class Schrodinger
   }
 
   /**
-   * Get the FDTD parameters buffer for display, or debugging.
+   * Get the FDTD parameters buffer for display or debugging.
    *
    * @returns {GPUBuffer} The FDTD parameters buffer.
    */
@@ -211,9 +191,10 @@ class Schrodinger
   {
     const timeStepShader = `
     struct Parameters {
-        dt: f32,          // The time step, Δt.
-        xResolution: u32, // The number of points along the x-axis, the number of elements in the array.
-        length: f32       // The physical length for our simulation.
+        dt: f32,              // The time step, Δt.
+        xResolution: u32,     // The number of points along the x-axis, the number of elements in the array.
+        length: f32,          // The physical length for our simulation.
+        potential: array<f32> // The potential the particle moves through.
     }
 
     // group 0, things that never change within a simulation.
@@ -234,20 +215,22 @@ class Schrodinger
       if (index >= parameters.xResolution) {
         return;
       }
-      // waveFunction and updatedWaveFunction have the same size.
+      // potential, waveFunction, and updatedWaveFunction all have the same size.
       let dx = parameters.length / f32(parameters.xResolution-1);
       let dx22 = dx*dx*2.0;
+      let v = parameters.potential[index];
+      
       let waveFunctionAtX = waveFunction[index];
       let waveFunctionAtXPlusDx = waveFunction[min(index+1, parameters.xResolution-1)];
       let waveFunctionAtXMinusDx = waveFunction[max(index-1, 0)];
-    
+
       updatedWaveFunction[index].x = waveFunctionAtX.x
-                                    - ((waveFunctionAtXPlusDx.y - 2.0*waveFunctionAtX.y + waveFunctionAtXMinusDx.y)
-                                        / dx22) * parameters.dt;
+                    - ((waveFunctionAtXPlusDx.y - 2.0*waveFunctionAtX.y + waveFunctionAtXMinusDx.y)
+                        / dx22 - v*waveFunctionAtX.y) * parameters.dt;
 
       updatedWaveFunction[index].y = waveFunctionAtX.y
-                                        + ((waveFunctionAtXPlusDx.x - 2.0*waveFunctionAtX.x + waveFunctionAtXMinusDx.x)
-                                            / dx22) * parameters.dt;
+                    + ((waveFunctionAtXPlusDx.x - 2.0*waveFunctionAtX.x + waveFunctionAtXMinusDx.x)
+                        / dx22 - v*waveFunctionAtX.x) * parameters.dt;
     }
   `;
 
@@ -273,7 +256,7 @@ class Schrodinger
     });
 
     const waveFunctionBindGroupLayout = this.#device.createBindGroupLayout({
-      label: "Wave function data layout.",
+      label: "Wave function data.",
       entries: [
         {
           binding: 0,
@@ -293,7 +276,6 @@ class Schrodinger
     });
 
     this.#computePipeline = this.#device.createComputePipeline({
-        label: "compute pipeline",
         layout: this.#device.createPipelineLayout({
         bindGroupLayouts: [this.#parametersBindGroupLayout, waveFunctionBindGroupLayout]
       }),
@@ -308,8 +290,9 @@ class Schrodinger
       mappedAtCreation: true,
       size: Float32Array.BYTES_PER_ELEMENT                    // dt
           + Uint32Array.BYTES_PER_ELEMENT                     // xResolution
-          + Float32Array.BYTES_PER_ELEMENT,                   // length
-      usage:  this.#debug ? GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC : GPUBufferUsage.STORAGE
+          + Float32Array.BYTES_PER_ELEMENT                    // length
+          + this.#xResolution*Float32Array.BYTES_PER_ELEMENT, // potential
+      usage:  this.#debug ? GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_SRC : GPUBufferUsage.STORAGE
             // How we use this buffer, in the debug case we copy it to another buffer for reading
     });
 
@@ -322,12 +305,15 @@ class Schrodinger
     new Uint32Array(parametersArrayBuffer, bytesSoFar, 1).set([this.#xResolution]);
     bytesSoFar += Uint32Array.BYTES_PER_ELEMENT;
     new Float32Array(parametersArrayBuffer, bytesSoFar, 1).set([this.#length]);
+    bytesSoFar += Float32Array.BYTES_PER_ELEMENT;
+    if (this.#potential) {
+      new Float32Array(parametersArrayBuffer, bytesSoFar, this.#xResolution).set(this.#potential);
+    }
 
     // Unmap the buffer returning ownership to the GPU.
     this.#parametersBuffer.unmap();
 
     this.#parametersBindGroup = this.#device.createBindGroup({
-      label: "parameters bind group",
       layout: this.#parametersBindGroupLayout,
       entries: [
         {
@@ -336,8 +322,7 @@ class Schrodinger
             buffer: this.#parametersBuffer
           }
         }
-      ]
-    });
+      ]});
 
     // Wave function representations
     this.#waveFunctionBuffer0 = this.#device.createBuffer({
@@ -353,7 +338,6 @@ class Schrodinger
     });
 
     this.#waveFunctionBindGroup[0] = this.#device.createBindGroup({
-      label: "Bind group 0",
       layout: waveFunctionBindGroupLayout,
       entries: [
         {
@@ -372,7 +356,6 @@ class Schrodinger
     });
 
     this.#waveFunctionBindGroup[1] = this.#device.createBindGroup({
-      label: "Bind group 1",
       layout: waveFunctionBindGroupLayout,
       entries: [
         {
@@ -399,14 +382,16 @@ class Schrodinger
    * @param {Integer}       xResolution The size of the wave function arrays, the number of spatial steps
    *                                    on our 1D grid.
    * @param {Number}        length      The characteristic length for the problem in terms of natural units.
+   * @param {Array<Number>} potential   An array of potential values, array elements correspond to physical locations
+   *                                    just as the wave function arrays.
    * @param {Boolean}       debug       The debug option for this execution of the FDTD solver. Enabling this
    *                                    makes the wave function buffers copyable, potentially having a
    *                                    performance impact. Defaults to false.
    * @return Promise<Schrodinger> A promise that resolves to the requested Schrodinger instance.
    * @see #init
    */
-  static async getInstance(dt, xResolution, length, debug=false){
-    const schrodinger = new Schrodinger(dt, xResolution, length, debug);
+  static async getInstance(dt, xResolution, length, potential, debug=false){
+    const schrodinger = new Schrodinger(dt, xResolution, length, potential, debug);
     return schrodinger.init();
   }
 
@@ -418,27 +403,27 @@ class Schrodinger
   /**
    * Execute count iterations of the simulation.
    *
-   * @param {Integer} count The number of iterations to carry out.
+   * @param {Integer }count The number of iterations to carry out.
    */
   step(count=20)
   {
     this.#running = true;
 
+    // Recreate this because it can not be reused after finish is invoked.
+    const commandEncoder = this.#device.createCommandEncoder();
     const workgroupCountX = Math.ceil(this.#xResolution / 64);
+    const passEncoder = commandEncoder.beginComputePass();
+    passEncoder.setPipeline(this.#computePipeline);
+    passEncoder.setBindGroup(0, this.#parametersBindGroup);
     for (let i=0; i<count && this.#running; i++)
     {
-      // Created in the loop because it can not be reused after finish is invoked.
-      const commandEncoder = this.#device.createCommandEncoder();
-      const passEncoder = commandEncoder.beginComputePass();
-      passEncoder.setPipeline(this.#computePipeline);
-      passEncoder.setBindGroup(0, this.#parametersBindGroup);
       passEncoder.setBindGroup(1, this.#waveFunctionBindGroup[i%2]);
       passEncoder.dispatchWorkgroups(workgroupCountX);
-
-      passEncoder.end();
-      // Submit GPU commands.
-      this.#device.queue.submit([commandEncoder.finish()]);
     }
+    passEncoder.end();
+    // Submit GPU commands.
+    const gpuCommands = commandEncoder.finish();
+    this.#device.queue.submit([gpuCommands]);
   }
 }
 

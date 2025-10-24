@@ -1,5 +1,5 @@
 /**
- * Copyright 2017 Vizit Solutions
+ * Copyright 2025 Vizit Solutions
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -13,232 +13,154 @@
  *    See the License for the specific language governing permissions and
  *    limitations under the License.
  */
-function MurBoundary(gpgpUtility_, xResolution_, length_, dt_, vp_)
+class MurBoundary
 {
-  "use strict";
+    #schrodinger;
+    #device;
+    #boundaryValueShaderModule;
+    #boundaryValueBindGroup;
+    #boundaryValueParametersLayout;
+    #boundaryValueParameters;
+    #parametersBindGroup;
+    #boundaryValuePipeline;
+    #phaseVelocity;
+    #debug;
 
-  var dt;
-  var dtHandle;
-  /** WebGLRenderingContext */
-  var gl;
-  var gpgpUtility;
-  var length;
-  var lengthHandle;
-  /** The wave function at t - delta t */
-  var oldWaveFunctionHandle;
-  var phaseVelocityHandle;
-  var phaseVelocity;
-  var pixels;
-  var positionHandle;
-  var potential;
-  var potentialHandle;
-  var program;
-  // Whether this is a zero or one step - determined which texture is the source, which is rendered to.
-  var step;
-  var textureCoordHandle;
-  var textures;
-  var vertices;
-  /** The wave function at t */
-  var waveFunctionHandle;
-  var xResolution;
-  var xResolutionHandle;
-
-  /**
-   * Compile shaders and link them into a program, then retrieve references to the
-   * attributes and uniforms. The standard vertex shader, which simply passes on the
-   * physical and texture coordinates, is used.
-   *
-   * @returns {WebGLProgram} The created program object.
-   * @see {https://www.khronos.org/registry/webgl/specs/1.0/#5.6|WebGLProgram}
-   */
-  this.createProgram = function (gl)
-  {
-    var fragmentShaderSource;
-    var program;
-
-    // Note that the preprocessor requires the newlines.
-    fragmentShaderSource = "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
-                         + "precision highp float;\n"
-                         + "#else\n"
-                         + "precision mediump float;\n"
-                         + "#endif\n"
-                         + ""
-                         // The delta-t for each timestep.
-                         + "uniform float dt;"
-                         // The physical length of the grid in nm.
-                         + "uniform float length;"
-                         // An estimate of the phase velocity at the boundary
-                         + "uniform float vp;"
-                         // At time t - delta t waveFunction.r is the real part waveFunction.g is the imaginary part.
-                         + "uniform sampler2D oldWaveFunction;"
-                         // The number of points along the x-axis.
-                         + "uniform int xResolution;"
-                         + ""
-                         // At time t waveFunction.r is the real part waveFunction.g is the imaginary part.
-                         + "uniform sampler2D waveFunction;"
-                         // Discrete representation of the potential function.
-                         + "uniform sampler2D potential;"
-                         + ""
-                         // Vector to mix the real and imaginary parts in the wave function update.
-                         + "const vec2 mixing = vec2(-1.0, +1.0);"
-                         + ""
-                         + "varying vec2 vTextureCoord;"
-                         + ""
-                         + "void main()"
-                         + "{"
-                         + "  float dx;"
-                         + "  vec2  ds;"
-                         + "  vec2  innerTextureCoord;"
-                         + "  vec2  innerValue;"
-                         + "  float offset;"
-                         + "  vec4  value;"
-                         + ""
-                         + "  dx                = length/float(xResolution);"
-                         + "  ds                = vec2(1.2/float(xResolution), 0.0);"
-                         // On the left edge, compute the value of psi(x+dx), on the right edge, compute psi(x-dx)
-                         + "  offset            = 1.0 - 2.0*step(0.5, vTextureCoord.s);"
-                         + "  innerTextureCoord = vTextureCoord + offset*ds;"
-                         + "  value             = texture2D(waveFunction, innerTextureCoord);"
-                         + ""
-                         // One step in from the edge, at t+&Delta;t
-                         + "  innerValue        =  texture2D(oldWaveFunction, innerTextureCoord).rg"
-                         + "                       + ((texture2D(waveFunction, innerTextureCoord+ds).gr"
-                         + "                             - 2.0*value.gr"
-                         + "                             + texture2D(waveFunction, innerTextureCoord-ds).gr)/(dx*dx)"
-                         + "                          - 2.0*texture2D(potential, innerTextureCoord).r*value.gr)*mixing*dt;"
-                         + ""
-                         + "  gl_FragColor.rg = value.rg"
-                         + "                    + ((vp*dt-dx)/(vp*dt+dx))*(innerValue"
-                         + "                                               - texture2D(waveFunction, vTextureCoord).rg);"
-                         + "}";
-
-    program               = gpgpUtility.createProgram(null, fragmentShaderSource);
-    positionHandle        = gpgpUtility.getAttribLocation(program,  "position");
-    gl.enableVertexAttribArray(positionHandle);
-    textureCoordHandle    = gpgpUtility.getAttribLocation(program,  "textureCoord");
-    gl.enableVertexAttribArray(textureCoordHandle);
-    dtHandle              = gl.getUniformLocation(program, "dt");
-    oldWaveFunctionHandle = gl.getUniformLocation(program, "oldWaveFunction");
-    phaseVelocityHandle   = gl.getUniformLocation(program, "vp");
-    potentialHandle       = gl.getUniformLocation(program, "potential");
-    waveFunctionHandle    = gl.getUniformLocation(program, "waveFunction");
-    xResolutionHandle     = gl.getUniformLocation(program, "xResolution");
-    lengthHandle          = gl.getUniformLocation(program, "length");
-
-    return program;
-  };
-
-  /**
-   * Read back the i, j pixel and display it to the console.
-   * 
-   * @param i       {integer} the i index of the texel to be tested.
-   * @param j       {integer} the j index of the texel to be tested.
-   */
-  this.test = function(i, j)
-  {
-    var buffer;
-
-    // One each for RGBA component of a pixel
-    buffer = new Float32Array(4);
-    // Read a 1x1 block of pixels, a single pixel
-    gl.readPixels(i,                // x-coord of lower left corner
-                  j,                // y-coord of lower left corner
-                  1,                // width of the block
-                  1,                // height of the block
-                  gl.RGBA,          // Format of pixel data.
-                  gl.FLOAT,         // Data type of the pixel data, must match makeTexture
-                  buffer);          // Load pixel data into buffer
-
-    console.log(buffer);
-  }
-
-  /**
-   * Return 1D boundary with texture coordinates for Mur boundary conditions.
-   * One point at each end of the 1xn strip we are using in this simulation.
-   * (-1, 0.5) as the left boundary, (1,0.5) as the right edge.
-   *
-   * @returns {Float32Array} A set of points and textures containing one point at
-   *                         each end of the simulation.
-   */
-  this.getGeometry = function ()
-  {
-    // Sets of x,y,z(=0),s,t coordinates.
-    return new Float32Array([-1.0+(0.5/xResolution), 0.0, 0.0, 0.0, 0.0,  // left edge
-                              1.0, 0.0, 0.0, 1.0, 0.0]);// right edge
-  };
-
-  /**
-   * Return vertices for the boundary. If they don't yet exist,
-   * they are created and loaded with the appropriate geometry.
-   * If they already exist, they are bound and returned.
-   *
-   * @returns {WebGLBuffer} A bound buffer containing the standard geometry.
-   */
-  this.getVertices = function ()
-  {
-    if (!vertices)
+    constructor(schrodinger, E, debug=false)
     {
-      vertices = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, vertices);
-      gl.bufferData(gl.ARRAY_BUFFER, this.getGeometry(), gl.STATIC_DRAW);
+        this.#schrodinger = schrodinger;
+        this.#device = schrodinger.getDevice();
+        this.#parametersBindGroup = schrodinger.getParametersBindGroup();
+        // Phase velocity = w/k = K+V/Sqrt(2mK), w/V=0, m=1
+        this.#phaseVelocity = Math.sqrt(0.5*E);
+        this.#debug = debug;
     }
-    else
+
+    init()
     {
-      gl.bindBuffer(gl.ARRAY_BUFFER, vertices);
+        const boundaryConditionsShader = `
+          struct Parameters {
+            dt: f32,              // The time step, Δt.
+            xResolution: u32,     // The number of points along the x-axis, the number of elements in the array.
+            length: f32,          // The physical length for our simulation.
+            potential: array<f32> // The potential the particle moves through.
+          }
+          
+          // group 0, things that never change within a simulation.
+          // The parameters for the simulation
+          @group(0) @binding(0) var<storage, read> parameters: Parameters;
+          
+          // Group 1, changes on each iteration - the same as in the main solver to keep the same bindings.
+          // Older wave function at t-Δt.
+          @group(1) @binding(0) var<storage, read> oldWaveFunction : array<vec2f>;
+          // Current wave function at t.
+          @group(1) @binding(1) var<storage, read> waveFunction : array<vec2f>;
+          // The updated wave function at t+Δt.
+          @group(1) @binding(2) var<storage, read_write> updatedWaveFunction : array<vec2f>;
+          
+          // Group 2, boundary value specific data.
+          @group(2) @binding(0) var<uniform> phaseVelocity : f32;
+          
+          @compute @workgroup_size(2)
+          fn recomputeBoundary(@builtin(global_invocation_id) global_id : vec3u)
+          {
+            // Index will be 0 at the left edge, and 1 at the right edge.
+            let index = global_id.x;
+            let sotrageBufferIndex = index*(parameters.xResolution-1);
+            let offset = 1 - 2*index;
+            let dx = parameters.length / f32(parameters.xResolution-1);
+            
+            updatedWaveFunction[sotrageBufferIndex] = waveFunction[sotrageBufferIndex+offset]
+                 + ((phaseVelocity*parameters.dt-dx)/(phaseVelocity*parameters.dt+dx))
+                    *(updatedWaveFunction[sotrageBufferIndex+offset]-waveFunction[sotrageBufferIndex]);
+          }
+        `;
+
+        this.#boundaryValueShaderModule = this.#device.createShaderModule({
+            label: 'Mur Boundary Shader shader',
+            code: boundaryConditionsShader
+        });
+
+        this.#boundaryValueParametersLayout = this.#device.createBindGroupLayout({
+            label: "Mur Boundary parameters layout",
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: {}
+                }
+            ]
+        });
+
+        this.#boundaryValueParameters = this.#device.createBuffer({
+            label: "Boundary parameters buffer",
+            mappedAtCreation: true,
+            size: Float32Array.BYTES_PER_ELEMENT,    // the single phase velocity parameter
+            usage:  this.#debug ? GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC : GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+            // How we use this buffer, in the debug case we copy it to another buffer for reading
+        });
+
+        // Get the raw array buffer for the mapped GPU buffer
+        const parametersArrayBuffer = this.#boundaryValueParameters.getMappedRange();
+
+        new Float32Array(parametersArrayBuffer, 0, 1).set([this.#phaseVelocity]);
+
+        // Unmap the buffer returning ownership to the GPU.
+        this.#boundaryValueParameters.unmap();
+
+        this.#boundaryValueBindGroup = this.#device.createBindGroup({
+            layout: this.#boundaryValueParametersLayout,
+            entries: [
+                {
+                    binding: 0,
+                    resource: {
+                        buffer: this.#boundaryValueParameters
+                    }
+                }
+            ]
+        });
+
+        this.#boundaryValuePipeline = this.#device.createComputePipeline({
+            layout: this.#device.createPipelineLayout({
+                bindGroupLayouts: [
+                                    this.#schrodinger.getParametersBindGroupLayout(),
+                                    this.#schrodinger.getWavefunctionBindGroupLayout(),
+                                    this.#boundaryValueParametersLayout
+                                  ]
+            }),
+            compute: {
+                module: this.#boundaryValueShaderModule,
+                entryPoint: "recomputeBoundary"
+            }
+        });
+
+        return this;
     }
-    return vertices;
-  };
 
+    static getInstance(schrodinger, E, debug)
+    {
+        const murBoundary = new MurBoundary(schrodinger, E, debug);
+        return murBoundary.init();
+    }
 
-
-  /**
-   * Renders points at the boundary of the simulation to compute the boundary
-   * values using the one way wave equations
-   */
-  this.render = function()
-  {
-    var gl;
-
-    gl = gpgpUtility.getComputeContext();
-
-    gl.useProgram(program);
-
-    this.getVertices();
-
-    gl.vertexAttribPointer(positionHandle,     3, gl.FLOAT, gl.FALSE, 20, 0);
-    gl.vertexAttribPointer(textureCoordHandle, 2, gl.FLOAT, gl.FALSE, 20, 12);
-
-    gl.uniform1f(dtHandle,            dt);
-    gl.uniform1i(xResolutionHandle,   xResolution);
-    gl.uniform1f(lengthHandle,        length);
-    gl.uniform1f(phaseVelocityHandle, phaseVelocity);
-
-    // Texture samplers, carried over from the main compute step
-    gl.uniform1i(oldWaveFunctionHandle, 1);
-
-    gl.uniform1i(waveFunctionHandle, 2);
-
-    //this.test(1599, 0);
-
-    gl.drawArrays(gl.POINTS, 0, 2);
-
-    //this.test(0, 0);
-  };
-
-  /**
-   * Invoke to clean up resources specific to this program. We leave the texture
-   * and frame buffer intact as they are used in follow-on calculations.
-   */
-  this.done = function ()
-  {
-    gl.deleteProgram(program);
-  };
-
-  dt            = dt_;
-  gpgpUtility   = gpgpUtility_;
-  gl            = gpgpUtility.getGLContext();
-  program       = this.createProgram(gl);
-  length        = length_;
-  phaseVelocity = vp_;
-  xResolution   = xResolution_;
+    /**
+     * Append a compute pass to implement the boundary conditions.
+     *
+     * @param {GPUCommandEncoder} commandEncoder The command encoder currently in use to collect GPU commands.
+     * @param {GPUBindGroup} The bind group, describing which wave function buffers are bound to which indices,
+     *                       is currently in use.
+     */
+    makeComputePass(commandEncoder, waveFunctionBindGroup)
+    {
+        const passEncoder = commandEncoder.beginComputePass();
+        passEncoder.setPipeline(this.#boundaryValuePipeline);
+        passEncoder.setBindGroup(0, this.#parametersBindGroup);
+        passEncoder.setBindGroup(1, waveFunctionBindGroup);
+        passEncoder.setBindGroup(2, this.#boundaryValueBindGroup);
+        // We just need the one two thread workgroup, one for each edge.
+        passEncoder.dispatchWorkgroups(1);
+        passEncoder.end();
+    }
 }
+
+export {MurBoundary}

@@ -20,7 +20,8 @@ import {WebGPUCompute} from "./WebGPUCompute.js";
  */
 
 /**
- * An FDTD time evolver for the Schrödinger wave function.
+ * An FDTD time evolver for the Schrödinger wave function with wave function updates along multiple
+ * points per shader invocation.
  *
  * @property {GPUDevice} #device The device as retrieved from the adaptor.
  * @property {Number} #dt The time step between the wave function and its updated version.
@@ -42,13 +43,14 @@ class Schrodinger
   #dt;
   #length;
   #xResolution;
+  #iterations;
   #running;
   #parametersBuffer;
   #parametersBindGroup;
   #parametersBindGroupLayout;
   #waveFunctionBuffer0;
   #waveFunctionBuffer1;
-  #waveFunctionBindGroup = new Array(2);
+  #waveFunctionBindGroup;
   #computePipeline;
   #debug;
 
@@ -59,15 +61,17 @@ class Schrodinger
    * @param {Integer}       xResolution The size of the wave function arrays, the number of spatial steps
    *                                    on our 1D grid.
    * @param {Number}        length      The characteristic length for the problem in terms of natural units.
+   * @param {Integer}       iterations  The number of iterations executed by the step method.
    * @param {Boolean}       debug       The debug option for this execution of the FDTD solver. Enabling this
    *                                    makes the wave function buffers copyable, potentially having a
    *                                    performance impact. Defaults to false.
    */
-  constructor(dt, xResolution, length, debug=false)
+  constructor(dt, xResolution, length, iterations, debug=false)
   {
     this.#dt = dt;
     this.#xResolution = xResolution;
     this.#length = length;
+    this.#iterations = iterations;
     this.#debug = debug;
   }
 
@@ -222,36 +226,64 @@ class Schrodinger
   
     //group 1, changes on each iteration
     // Initial wave function at t.
-    @group(1) @binding(0) var<storage, read> waveFunction : array<vec2f>;
+    @group(1) @binding(0) var<storage, read_write> waveFunction : array<vec2f>;
     // The updated wave function at t+Δt.
     @group(1) @binding(1) var<storage, read_write> updatedWaveFunction : array<vec2f>;
-  
+    
+    override iterations = 250;
+    // Our problem size / workgroup size = 1024 / 64 = 16;
+    override blockSize = 16u;
+    
     @compute @workgroup_size(64)
-    fn timeStep(@builtin(global_invocation_id) global_id : vec3u)
+    fn timeSteps(@builtin(global_invocation_id) global_id : vec3u)
     {
-      let index = global_id.x;
-      // Skip invocations when work groups exceed the actual problem size
-      if (index >= parameters.xResolution) {
-        return;
-      }
       // waveFunction and updatedWaveFunction have the same size.
       let dx = parameters.length / f32(parameters.xResolution-1);
       let dx22 = dx*dx*2.0;
-      let waveFunctionAtX = waveFunction[index];
-      let waveFunctionAtXPlusDx = waveFunction[min(index+1, parameters.xResolution-1)];
-      let waveFunctionAtXMinusDx = waveFunction[max(index-1, 0)];
-    
-      updatedWaveFunction[index].x = waveFunctionAtX.x
-                                    - ((waveFunctionAtXPlusDx.y - 2.0*waveFunctionAtX.y + waveFunctionAtXMinusDx.y)
-                                        / dx22) * parameters.dt;
+      let firstPsiIndex = global_id.x*blockSize;
 
-      updatedWaveFunction[index].y = waveFunctionAtX.y
-                                        + ((waveFunctionAtXPlusDx.x - 2.0*waveFunctionAtX.x + waveFunctionAtXMinusDx.x)
-                                            / dx22) * parameters.dt;
+      for (var i=0; i<iterations; i++)
+      {
+          for (var k=0u; k<blockSize; k++)
+          {
+            let thisPsiIndex = firstPsiIndex+k;
+            let waveFunctionAtX = waveFunction[thisPsiIndex];
+            let waveFunctionAtXPlusDx = waveFunction[min(thisPsiIndex+1, parameters.xResolution-1)];
+            let waveFunctionAtXMinusDx = waveFunction[max(thisPsiIndex-1, 0)];
+    
+            updatedWaveFunction[thisPsiIndex].x = waveFunctionAtX.x
+                        - ((waveFunctionAtXPlusDx.y - 2.0*waveFunctionAtX.y + waveFunctionAtXMinusDx.y)
+                            / dx22) * parameters.dt;
+
+            updatedWaveFunction[thisPsiIndex].y = waveFunctionAtX.y
+                        + ((waveFunctionAtXPlusDx.x - 2.0*waveFunctionAtX.x + waveFunctionAtXMinusDx.x)
+                            / dx22) * parameters.dt;
+          }
+          storageBarrier();
+          
+          for (var k=0u; k<blockSize; k++)
+          {
+            let thisPsiIndex = firstPsiIndex+k;
+            let waveFunctionAtX = updatedWaveFunction[thisPsiIndex];
+            let waveFunctionAtXPlusDx = updatedWaveFunction[min(thisPsiIndex+1, parameters.xResolution-1)];
+            let waveFunctionAtXMinusDx = updatedWaveFunction[max(thisPsiIndex-1, 0)];
+      
+            waveFunction[thisPsiIndex].x = waveFunctionAtX.x
+                      - ((waveFunctionAtXPlusDx.y - 2.0*waveFunctionAtX.y + waveFunctionAtXMinusDx.y)
+                          / dx22) * parameters.dt;
+
+            waveFunction[thisPsiIndex].y = waveFunctionAtX.y
+                        + ((waveFunctionAtXPlusDx.x - 2.0*waveFunctionAtX.x + waveFunctionAtXMinusDx.x)
+                            / dx22) * parameters.dt;
+          }
+          storageBarrier();
+      }
     }
   `;
 
+
     const webgpuCompute = new WebGPUCompute();
+
     this.#device = await webgpuCompute.getDevice();
 
     const timeStepShaderModule = this.#device.createShaderModule({
@@ -262,9 +294,9 @@ class Schrodinger
     this.#parametersBindGroupLayout = this.#device.createBindGroupLayout({
       label: "Simulation parameters",
       entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.COMPUTE | GPUShaderStage.FRAGMENT,
+      {
+        binding: 0,
+        visibility: GPUShaderStage.COMPUTE | GPUShaderStage.FRAGMENT,
           buffer: {
             type: "read-only-storage"
           }
@@ -273,13 +305,13 @@ class Schrodinger
     });
 
     const waveFunctionBindGroupLayout = this.#device.createBindGroupLayout({
-      label: "Wave function data layout.",
+      label: "Wave function data.",
       entries: [
         {
           binding: 0,
           visibility: GPUShaderStage.COMPUTE,
           buffer: {
-            type: "read-only-storage"
+            type: "storage"
           }
         },
         {
@@ -293,13 +325,13 @@ class Schrodinger
     });
 
     this.#computePipeline = this.#device.createComputePipeline({
-        label: "compute pipeline",
-        layout: this.#device.createPipelineLayout({
+      label: "Multipoint shader pipeline.",
+      layout: this.#device.createPipelineLayout({
         bindGroupLayouts: [this.#parametersBindGroupLayout, waveFunctionBindGroupLayout]
       }),
       compute: {
         module: timeStepShaderModule,
-        entryPoint: "timeStep"
+        entryPoint: "timeSteps"
       }
     });
 
@@ -307,10 +339,9 @@ class Schrodinger
       label: "Parameters buffer",
       mappedAtCreation: true,
       size: Float32Array.BYTES_PER_ELEMENT                    // dt
-          + Uint32Array.BYTES_PER_ELEMENT                     // xResolution
-          + Float32Array.BYTES_PER_ELEMENT,                   // length
-      usage:  this.#debug ? GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC : GPUBufferUsage.STORAGE
-            // How we use this buffer, in the debug case we copy it to another buffer for reading
+            + Uint32Array.BYTES_PER_ELEMENT                   // xResolution
+            + Float32Array.BYTES_PER_ELEMENT,                 // length
+      usage: this.#debug ? GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC : GPUBufferUsage.STORAGE
     });
 
     // Get the raw array buffer for the mapped GPU buffer
@@ -327,7 +358,6 @@ class Schrodinger
     this.#parametersBuffer.unmap();
 
     this.#parametersBindGroup = this.#device.createBindGroup({
-      label: "parameters bind group",
       layout: this.#parametersBindGroupLayout,
       entries: [
         {
@@ -342,18 +372,17 @@ class Schrodinger
     // Wave function representations
     this.#waveFunctionBuffer0 = this.#device.createBuffer({
       label: "Wave function 0",
-      size: 2*this.#xResolution*Float32Array.BYTES_PER_ELEMENT,
+      size: 2 * this.#xResolution * Float32Array.BYTES_PER_ELEMENT, // A wave function representation
       usage: this.#debug ? GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC : GPUBufferUsage.STORAGE
     });
 
     this.#waveFunctionBuffer1 = this.#device.createBuffer({
       label: "Wave function 1",
-      size: 2*this.#xResolution*Float32Array.BYTES_PER_ELEMENT,
+      size: 2 * this.#xResolution * Float32Array.BYTES_PER_ELEMENT, // A wave function representation
       usage: this.#debug ? GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC : GPUBufferUsage.STORAGE
     });
 
-    this.#waveFunctionBindGroup[0] = this.#device.createBindGroup({
-      label: "Bind group 0",
+    this.#waveFunctionBindGroup = this.#device.createBindGroup({
       layout: waveFunctionBindGroupLayout,
       entries: [
         {
@@ -371,24 +400,6 @@ class Schrodinger
       ]
     });
 
-    this.#waveFunctionBindGroup[1] = this.#device.createBindGroup({
-      label: "Bind group 1",
-      layout: waveFunctionBindGroupLayout,
-      entries: [
-        {
-          binding: 0,
-          resource: {
-            buffer:  this.#waveFunctionBuffer1
-          }
-        },
-        {
-          binding: 1,
-          resource: {
-            buffer: this.#waveFunctionBuffer0
-          }
-        }
-      ]});
-
     return this;
   }
 
@@ -399,14 +410,15 @@ class Schrodinger
    * @param {Integer}       xResolution The size of the wave function arrays, the number of spatial steps
    *                                    on our 1D grid.
    * @param {Number}        length      The characteristic length for the problem in terms of natural units.
+   * @param {Integer}       iterations  The number of iterations executed by the step method.
    * @param {Boolean}       debug       The debug option for this execution of the FDTD solver. Enabling this
    *                                    makes the wave function buffers copyable, potentially having a
    *                                    performance impact. Defaults to false.
    * @return Promise<Schrodinger> A promise that resolves to the requested Schrodinger instance.
    * @see #init
    */
-  static async getInstance(dt, xResolution, length, debug=false){
-    const schrodinger = new Schrodinger(dt, xResolution, length, debug);
+  static async getInstance(dt, xResolution, length, iterations, debug=false){
+    const schrodinger = new Schrodinger(dt, xResolution, length, iterations, debug);
     return schrodinger.init();
   }
 
@@ -417,28 +429,21 @@ class Schrodinger
 
   /**
    * Execute count iterations of the simulation.
-   *
-   * @param {Integer} count The number of iterations to carry out.
    */
-  step(count=20)
+  step()
   {
-    this.#running = true;
+    const commandEncoder = this.#device.createCommandEncoder();
 
-    const workgroupCountX = Math.ceil(this.#xResolution / 64);
-    for (let i=0; i<count && this.#running; i++)
-    {
-      // Created in the loop because it can not be reused after finish is invoked.
-      const commandEncoder = this.#device.createCommandEncoder();
-      const passEncoder = commandEncoder.beginComputePass();
-      passEncoder.setPipeline(this.#computePipeline);
-      passEncoder.setBindGroup(0, this.#parametersBindGroup);
-      passEncoder.setBindGroup(1, this.#waveFunctionBindGroup[i%2]);
-      passEncoder.dispatchWorkgroups(workgroupCountX);
+    const passEncoder = commandEncoder.beginComputePass();
+    passEncoder.setPipeline(this.#computePipeline);
+    passEncoder.setBindGroup(0, this.#parametersBindGroup);
+    passEncoder.setBindGroup(1, this.#waveFunctionBindGroup);
+    passEncoder.dispatchWorkgroups(1);
+    passEncoder.end();
 
-      passEncoder.end();
-      // Submit GPU commands.
-      this.#device.queue.submit([commandEncoder.finish()]);
-    }
+    // Submit GPU commands.
+    const gpuCommands = commandEncoder.finish();
+    this.#device.queue.submit([gpuCommands]);
   }
 }
 

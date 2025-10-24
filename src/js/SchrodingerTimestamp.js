@@ -19,8 +19,11 @@ import {WebGPUCompute} from "./WebGPUCompute.js";
  * @typedef {Number} Integer
  */
 
+const SECONDS_PER_NANOSECOND = 1.0E-09;
+
 /**
- * An FDTD time evolver for the Schrödinger wave function.
+ * A FDTD time evolver for the Schrödinger wave function. This time using timestamp queries
+ * to time shader executions.
  *
  * @property {GPUDevice} #device The device as retrieved from the adaptor.
  * @property {Number} #dt The time step between the wave function and its updated version.
@@ -34,6 +37,12 @@ import {WebGPUCompute} from "./WebGPUCompute.js";
  * @property {GPUBuffer} #waveFunctionBuffer1 One of two wave function buffers.
  * @property {GPUBindGroup[]} #waveFunctionBindGroup A pair of bind groups, used to ping pong the wave function buffers.
  * @property {GPUComputePipeline} #computePipeline The compute pipeline controlling some aspects of the shader execution.
+ * @property {Boolean} #hasTimestampQuery A boolean indicating whether this system supports time stamp queries.
+ * @property {GPUQuerySet} #timestampQueries The set of timestamp queries. Tracks the queries and their results.
+ * @property {GPUBuffer} #timestampBuffer Query results are copied from the query set to this buffer.
+ * @property {GPUBuffer} #timestampCopyBuffer Query results are then copied to this buffer where they can be mapped to main memory.
+ * @property {HTMLElement} #timestampDisplay HTML element used to display timing data.
+ * @property {Number} #maxDeltaT The max difference between time stamps, the max time taken by the compute shader.
  * @property {Boolean} #debug A flag indicating whether this is a debugging instance.
  */
 class Schrodinger
@@ -50,24 +59,32 @@ class Schrodinger
   #waveFunctionBuffer1;
   #waveFunctionBindGroup = new Array(2);
   #computePipeline;
+  #hasTimestampQuery;
+  #timestampQueries;
+  #timestampBuffer;
+  #timestampCopyBuffer;
+  #timestampDisplay;
+  #maxDeltaT = 0n;
   #debug;
 
   /**
    * Build a Schrödinger equation integrator with the given parameters.
    *
-   * @param {Number}        dt          The Δt between iterations of the wave function in natural units of time.
-   * @param {Integer}       xResolution The size of the wave function arrays, the number of spatial steps
-   *                                    on our 1D grid.
-   * @param {Number}        length      The characteristic length for the problem in terms of natural units.
-   * @param {Boolean}       debug       The debug option for this execution of the FDTD solver. Enabling this
-   *                                    makes the wave function buffers copyable, potentially having a
-   *                                    performance impact. Defaults to false.
+   * @param {Number}       dt               The Δt between iterations of the wave function in natural units of time.
+   * @param {Integer}      xResolution      The size of the wave function arrays, the number of spatial steps
+   *                                        on our 1D grid.
+   * @param {Number}       length           The characteristic length for the problem in terms of natural units.
+   * @param {HTMLElement}  timestampDisplay The HTML element used to display shader timing data.
+   * @param {Boolean}      debug            The debug option for this execution of the FDTD solver. Enabling this
+   *                                        makes the wave function buffers copyable, potentially having a
+   *                                        performance impact. Defaults to false.
    */
-  constructor(dt, xResolution, length, debug=false)
+  constructor(dt, xResolution, length, timestampDisplay, debug=false)
   {
     this.#dt = dt;
     this.#xResolution = xResolution;
     this.#length = length;
+    this.#timestampDisplay = timestampDisplay;
     this.#debug = debug;
   }
 
@@ -106,8 +123,8 @@ class Schrodinger
   /**
    * Set the number of array elements, or the number of spatial steps, in the wave function representation.
    *
-   * @param {Integer} xResolution The number of spatial steps in the wave function representation.
-   * @returns {Schrodinger} This object with the new resolution set.
+   * @param xResolution The number of spatial steps in the wave function representation.
+   * @returns {Schrodinger}
    */
   setXResolution(xResolution)
   {
@@ -252,7 +269,13 @@ class Schrodinger
   `;
 
     const webgpuCompute = new WebGPUCompute();
-    this.#device = await webgpuCompute.getDevice();
+    this.#hasTimestampQuery = await webgpuCompute.hasTimestampQuery();
+    if (this.#hasTimestampQuery) {
+      this.#device = await webgpuCompute.getTimestampDevice();
+    } else {
+      this.#device = await webgpuCompute.getDevice();
+    }
+
 
     const timeStepShaderModule = this.#device.createShaderModule({
       label: 'Schrodinger time step shader',
@@ -273,7 +296,7 @@ class Schrodinger
     });
 
     const waveFunctionBindGroupLayout = this.#device.createBindGroupLayout({
-      label: "Wave function data layout.",
+      label: "Wave function data.",
       entries: [
         {
           binding: 0,
@@ -293,7 +316,6 @@ class Schrodinger
     });
 
     this.#computePipeline = this.#device.createComputePipeline({
-        label: "compute pipeline",
         layout: this.#device.createPipelineLayout({
         bindGroupLayouts: [this.#parametersBindGroupLayout, waveFunctionBindGroupLayout]
       }),
@@ -327,7 +349,6 @@ class Schrodinger
     this.#parametersBuffer.unmap();
 
     this.#parametersBindGroup = this.#device.createBindGroup({
-      label: "parameters bind group",
       layout: this.#parametersBindGroupLayout,
       entries: [
         {
@@ -353,7 +374,6 @@ class Schrodinger
     });
 
     this.#waveFunctionBindGroup[0] = this.#device.createBindGroup({
-      label: "Bind group 0",
       layout: waveFunctionBindGroupLayout,
       entries: [
         {
@@ -372,7 +392,6 @@ class Schrodinger
     });
 
     this.#waveFunctionBindGroup[1] = this.#device.createBindGroup({
-      label: "Bind group 1",
       layout: waveFunctionBindGroupLayout,
       entries: [
         {
@@ -389,24 +408,43 @@ class Schrodinger
         }
       ]});
 
+    if (this.#hasTimestampQuery) {
+      // We expect to submit two queries, one at the top of the compute pass,
+      // and the second at the bottom of the compute pass.
+      this.#timestampQueries = await webgpuCompute.createQuerySet(WebGPUCompute.TIMESTAMP_QUERY_TYPE, 2);
+      this.#timestampBuffer = this.#device.createBuffer({
+        label: "Time stamp query buffer",
+        size: this.#timestampQueries.count * BigInt64Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+      });
+      // This is the buffer we map to a CPU side array buffer, it is of necessity the same size as the
+      // query results buffer
+      this.#timestampCopyBuffer = this.#device.createBuffer({
+        label: "Time stamp mappable buffer",
+        size: this.#timestampBuffer.size,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+    }
+
     return this;
   }
 
   /**
    * Get an initialized instance of a Schrödinger equation integrator with the given parameters.
    *
-   * @param {Number}        dt          The Δt between iterations of the wave function in natural units of time.
-   * @param {Integer}       xResolution The size of the wave function arrays, the number of spatial steps
-   *                                    on our 1D grid.
-   * @param {Number}        length      The characteristic length for the problem in terms of natural units.
-   * @param {Boolean}       debug       The debug option for this execution of the FDTD solver. Enabling this
-   *                                    makes the wave function buffers copyable, potentially having a
-   *                                    performance impact. Defaults to false.
+   * @param {Number}        dt               The Δt between iterations of the wave function in natural units of time.
+   * @param {Integer}       xResolution      The size of the wave function arrays, the number of spatial steps
+   *                                         on our 1D grid.
+   * @param {Number}        length           The characteristic length for the problem in terms of natural units.
+   * @param {HTMLElement}   timestampDisplay An HTML element where we can display the timestamp results.
+   * @param {Boolean}       debug            The debug option for this execution of the FDTD solver. Enabling this
+   *                                         makes the wave function buffers copyable, potentially having a
+   *                                         performance impact. Defaults to false.
    * @return Promise<Schrodinger> A promise that resolves to the requested Schrodinger instance.
    * @see #init
    */
-  static async getInstance(dt, xResolution, length, debug=false){
-    const schrodinger = new Schrodinger(dt, xResolution, length, debug);
+  static async getInstance(dt, xResolution, length, timestampDisplay, debug=false){
+    const schrodinger = new Schrodinger(dt, xResolution, length, timestampDisplay, debug);
     return schrodinger.init();
   }
 
@@ -420,25 +458,67 @@ class Schrodinger
    *
    * @param {Integer} count The number of iterations to carry out.
    */
-  step(count=20)
+  async step(count=20)
   {
     this.#running = true;
+    let deltaT = 0n;
 
     const workgroupCountX = Math.ceil(this.#xResolution / 64);
     for (let i=0; i<count && this.#running; i++)
     {
       // Created in the loop because it can not be reused after finish is invoked.
       const commandEncoder = this.#device.createCommandEncoder();
-      const passEncoder = commandEncoder.beginComputePass();
+
+      const passEncoder = commandEncoder.beginComputePass({
+        timestampWrites: {
+          querySet: this.#timestampQueries,
+          beginningOfPassWriteIndex: 0,
+          endOfPassWriteIndex: 1
+        }
+      });
       passEncoder.setPipeline(this.#computePipeline);
       passEncoder.setBindGroup(0, this.#parametersBindGroup);
       passEncoder.setBindGroup(1, this.#waveFunctionBindGroup[i%2]);
       passEncoder.dispatchWorkgroups(workgroupCountX);
-
       passEncoder.end();
+
+      // Resolve the timestamp queries we set in the command stream.
+      // https://developer.mozilla.org/en-US/docs/Web/API/GPUCommandEncoder/resolveQuerySet
+      commandEncoder.resolveQuerySet(
+          this.#timestampQueries,        // The GPUQuerySet
+          0,                             // The first query
+          this.#timestampQueries.count,  // The query count
+          this.#timestampBuffer,         // GPUBuffer destination
+          0);                            // Destination offset
+
+      // Copy the query resolve buffer to a CPU mappable buffer
+      // https://developer.mozilla.org/en-US/docs/Web/API/GPUCommandEncoder/copyBufferToBuffer
+      commandEncoder.copyBufferToBuffer(
+          this.#timestampBuffer,     // GPUBuffer we copy from
+          0,                         // Start at the beginning of the buffer
+          this.#timestampCopyBuffer, // GPUBuffer we copy to
+          0,                         // Starting at the beginning of the destination
+          this.#timestampBuffer.size // Copy the full contents of the source buffer
+      );
+
       // Submit GPU commands.
       this.#device.queue.submit([commandEncoder.finish()]);
     }
+    // Now we map this buffer to the CPU side.
+    await this.#timestampCopyBuffer.mapAsync(GPUMapMode.READ);
+
+
+    const timestampArrayBuffer = this.#timestampCopyBuffer.getMappedRange();
+    const timestampNanoseconds = new BigInt64Array(timestampArrayBuffer);
+
+    deltaT = timestampNanoseconds[1] - timestampNanoseconds[0];
+    if (deltaT > this.#maxDeltaT) {
+      this.#maxDeltaT = deltaT;
+      this.#timestampDisplay.innerText = (Number(deltaT)*SECONDS_PER_NANOSECOND).toExponential(2);
+    }
+
+    this.#timestampCopyBuffer.unmap();
+
   }
 }
 

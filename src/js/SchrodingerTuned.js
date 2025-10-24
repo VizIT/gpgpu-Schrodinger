@@ -242,12 +242,12 @@ class Schrodinger
       let waveFunctionAtXMinusDx = waveFunction[max(index-1, 0)];
     
       updatedWaveFunction[index].x = waveFunctionAtX.x
-                                    - ((waveFunctionAtXPlusDx.y - 2.0*waveFunctionAtX.y + waveFunctionAtXMinusDx.y)
-                                        / dx22) * parameters.dt;
+                      - ((waveFunctionAtXPlusDx.y - 2.0*waveFunctionAtX.y + waveFunctionAtXMinusDx.y)
+                          / dx22) * parameters.dt;
 
       updatedWaveFunction[index].y = waveFunctionAtX.y
-                                        + ((waveFunctionAtXPlusDx.x - 2.0*waveFunctionAtX.x + waveFunctionAtXMinusDx.x)
-                                            / dx22) * parameters.dt;
+                      + ((waveFunctionAtXPlusDx.x - 2.0*waveFunctionAtX.x + waveFunctionAtXMinusDx.x)
+                          / dx22) * parameters.dt;
     }
   `;
 
@@ -273,7 +273,7 @@ class Schrodinger
     });
 
     const waveFunctionBindGroupLayout = this.#device.createBindGroupLayout({
-      label: "Wave function data layout.",
+      label: "Wave function data.",
       entries: [
         {
           binding: 0,
@@ -293,7 +293,6 @@ class Schrodinger
     });
 
     this.#computePipeline = this.#device.createComputePipeline({
-        label: "compute pipeline",
         layout: this.#device.createPipelineLayout({
         bindGroupLayouts: [this.#parametersBindGroupLayout, waveFunctionBindGroupLayout]
       }),
@@ -327,7 +326,6 @@ class Schrodinger
     this.#parametersBuffer.unmap();
 
     this.#parametersBindGroup = this.#device.createBindGroup({
-      label: "parameters bind group",
       layout: this.#parametersBindGroupLayout,
       entries: [
         {
@@ -336,8 +334,7 @@ class Schrodinger
             buffer: this.#parametersBuffer
           }
         }
-      ]
-    });
+      ]});
 
     // Wave function representations
     this.#waveFunctionBuffer0 = this.#device.createBuffer({
@@ -353,7 +350,6 @@ class Schrodinger
     });
 
     this.#waveFunctionBindGroup[0] = this.#device.createBindGroup({
-      label: "Bind group 0",
       layout: waveFunctionBindGroupLayout,
       entries: [
         {
@@ -372,7 +368,6 @@ class Schrodinger
     });
 
     this.#waveFunctionBindGroup[1] = this.#device.createBindGroup({
-      label: "Bind group 1",
       layout: waveFunctionBindGroupLayout,
       entries: [
         {
@@ -418,27 +413,27 @@ class Schrodinger
   /**
    * Execute count iterations of the simulation.
    *
-   * @param {Integer} count The number of iterations to carry out.
+   * @param {Integer }count The number of iterations to carry out.
    */
   step(count=20)
   {
     this.#running = true;
 
+    // Recreate this because it can not be reused after finish is invoked.
+    const commandEncoder = this.#device.createCommandEncoder();
     const workgroupCountX = Math.ceil(this.#xResolution / 64);
+    const passEncoder = commandEncoder.beginComputePass();
+    passEncoder.setPipeline(this.#computePipeline);
+    passEncoder.setBindGroup(0, this.#parametersBindGroup);
     for (let i=0; i<count && this.#running; i++)
     {
-      // Created in the loop because it can not be reused after finish is invoked.
-      const commandEncoder = this.#device.createCommandEncoder();
-      const passEncoder = commandEncoder.beginComputePass();
-      passEncoder.setPipeline(this.#computePipeline);
-      passEncoder.setBindGroup(0, this.#parametersBindGroup);
       passEncoder.setBindGroup(1, this.#waveFunctionBindGroup[i%2]);
       passEncoder.dispatchWorkgroups(workgroupCountX);
-
-      passEncoder.end();
-      // Submit GPU commands.
-      this.#device.queue.submit([commandEncoder.finish()]);
     }
+    passEncoder.end();
+    // Submit GPU commands.
+    const gpuCommands = commandEncoder.finish();
+    this.#device.queue.submit([gpuCommands]);
   }
 }
 

@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Vizit Solutions
+ * Copyright 2016-2025 Vizit Solutions
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -15,157 +15,280 @@
  */
 
 /**
- * Given a 1D texture containing wave function values, draw those values onto
- * a canvas with the texture coordinates along the x axis and the function
- * values along the y axis. Attach the canvas to the parent.
+ * Given a 1D array containing wave function values, draw those values onto
+ * a canvas with the array index along the x-axis and the function
+ * values along the y-axis.
  */
-function SchrodingerResults(gpgpUtility_, parent_, color_, xResolution_, yResolution_, psiMax_)
+class SchrodingerResults
 {
-  "use strict";
-
-  var color;
-  var colorHandle;
-  var gpgpUtility;
-  var parent;
-  var positionHandle;
-  var potentialHandle;
-  var program;
-  var psiMax;
-  var psiMaxHandle;
-  var waveFunction;
-  var waveFunctionHandle;
-  var textureCoordHandle;
-  var xResolution;
-  var yResolution;
-  var yResolutionHandle;
+  #device;
+  #psiColor;
+  #psiMax;
+  #yResolution;
+  #parametersBindGroup;
+  #parametersBindGroupLayout;
+  #plotParametersBuffer;
+  #plotParametersBindGroupLayout;
+  #plotParametersBindGroup;
+  #vertexBuffer;
+  #vertexBuffersDescriptor;
+  #rendererShaderModule;
+  #canvasID;
+  #presentationFormat;
+  #webGPUContext;
 
   /**
-   * Compile shaders and link them into a program, then retrieve references to the
-   * attributes and uniforms. The standard vertex shader, which simply passes on the
-   * physical and texture coordinates, is used.
+   * Build a Schrödinger wave function visualization with the given parameters.
    *
-   * @returns {WebGLProgram} The created program object.
-   * @see {https://www.khronos.org/registry/webgl/specs/1.0/#5.6|WebGLProgram}
+   * @param {GPUDevice} device       The device in use for the simulation, to allow buffer reuse.
+   * @param {String} canvasID        The HTML ID for the canvas we render to.
+   * @param {GPUBindGroup} parametersBindGroup The bind group for the Schrödinger equation parameters,
+   *                                           carried over from the Schrödinger solver.
+   * @param {GPUBindGroupLayout} parametersBindGroupLayout The bind group layout for the simulation parameters
+   *                                                       from the Schrödinger simulation.
+   * @param {Array<Number>} psiColor The r, g, b, a color for the wave function, 0, 0, 0 0, for no plot.
+   * @param {Number} psiMax          The max psi value on the plot, the y-axis scale for the wave function plots.
+   * @param {Number} yResolution     The number of pixels in the y direction.
    */
-  this.createProgram = function (gl)
+  constructor(device, canvasID, parametersBindGroup, parametersBindGroupLayout,
+              psiColor, psiMax, yResolution)
   {
-    var fragmentShaderSource;
-    var program;
+    this.#device = device;
+    this.#canvasID = canvasID;
+    this.#parametersBindGroup = parametersBindGroup;
+    this.#parametersBindGroupLayout = parametersBindGroupLayout;
+    this.#psiColor = psiColor;
+    this.#psiMax = psiMax;
+    this.#yResolution = yResolution;
 
-    // Note that the preprocessor requires the newlines.
-    fragmentShaderSource = "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
-                         + "precision highp float;\n"
-                         + "#else\n"
-                         + "precision mediump float;\n"
-                         + "#endif\n"
-                         + ""
-                         + "uniform vec4 color;"
-                         // Y scale for the plot
-                         + " uniform float psiMax;"
-                         // waveFunction.r is the real part waveFunction.g is the imaginary part.
-                         + "uniform sampler2D waveFunction;"
-                         // The number of points along the y axis.
-                         + "uniform int yResolution;"
-                         + ""
-                         + "varying vec2 vTextureCoord;"
-                         + ""
-                         + "void main()"
-                         + "{"
-                         + "  float absPsi2;"
-                         + "  float halfDeltaT;"
-                         + "  vec2  psi;"
-                         + "  float psiMax2;"
-                         + ""
-                         + "  psiMax2 = psiMax*psiMax;"
-                         + "  halfDeltaT = 0.5/float(yResolution);"
-                         + ""
-                         + "  psi     = texture2D(waveFunction, vTextureCoord).rg;"
-                         + "  absPsi2 = psi.r*psi.r + psi.g*psi.g;"
-                         + ""
-                         + "  gl_FragColor = color*smoothstep(psiMax2*(vTextureCoord.y-1.5*halfDeltaT), psiMax2*(vTextureCoord.y-halfDeltaT), absPsi2)"
-                         + "                 - color*smoothstep(psiMax2*(vTextureCoord.y+halfDeltaT), psiMax2*(vTextureCoord.y+1.5*halfDeltaT), absPsi2);"
-                         + "}";
+    this.init();
+  }
 
-    program            = gpgpUtility.createProgram(null, fragmentShaderSource);
-    positionHandle     = gpgpUtility.getAttribLocation(program,  "position");
-    gl.enableVertexAttribArray(positionHandle);
-    textureCoordHandle = gpgpUtility.getAttribLocation(program,  "textureCoord");
-    gl.enableVertexAttribArray(textureCoordHandle);
-    potentialHandle    = gl.getUniformLocation(program, "potential");
-    waveFunctionHandle = gl.getUniformLocation(program, "waveFunction");
-    psiMaxHandle       = gl.getUniformLocation(program, "psiMax");
-    colorHandle        = gl.getUniformLocation(program, "color");
-    yResolutionHandle  = gl.getUniformLocation(program, "yResolution");
-
-    return program;
-  };
-
-  /**
-   * Setup for rendering to the screen. Create a canvas, get a rendering context,
-   * set uniforms.
-   */
-  this.setup = function(gpgpUtility, color, psiMax)
+  init()
   {
-    var gl;
-    gl = gpgpUtility.getGLContext();
+    const rendererShader = `
+        struct WaveFunctionParameters
+        {
+            dt: f32,              // The time step size
+            xResolution: u32,     // The number of points along the x-axis, the number of elements in the array.
+            length: f32,          // The full length for our simulation
+        }
+        
+        struct PlotParameters
+        {
+            // Psi*Psi color
+            psiColor: vec4f,
+            // Y scale for the psi plot
+            psiMax: f32,
+            // Number of points along the y axis.
+            yResolution: u32
+        }
+        
+        // group 0 and 1, things that never change within a simulation.
+        // The parameters for the simulation
+        @group(0) @binding(0) var<storage, read> waveFunctionParameters: WaveFunctionParameters;
+        // Plotting parameters, line colors, width, etc.
+        @group(1) @binding(0) var<uniform> plotParameters : PlotParameters;
+        
+        //group 1, Wave function at t, changes on each iteration
+        @group(2) @binding(0) var<storage, read> waveFunction : array<vec2f>;
+        
+        @fragment
+        fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32>
+        {
+            let psiMax2          = plotParameters.psiMax*plotParameters.psiMax;
+            // Remember, frag position ranges from 0.5 to xResolition-0.5,
+            // see https://www.w3.org/TR/webgpu/#rasterization
+            let index            = i32(fragPos.x);
+            let psi              = waveFunction[index];
+            let yResolution1     = 1.0/f32(plotParameters.yResolution);
+            let adjustedPixel    = (f32(plotParameters.yResolution)-fragPos.y) * yResolution1;
+            let absPsi2          = psi.r*psi.r + psi.g*psi.g;
+            
+            return plotParameters.psiColor*(smoothstep(psiMax2*(adjustedPixel-1.5*yResolution1),
+                                                       psiMax2*(adjustedPixel-yResolution1),
+                                                       absPsi2)
+                                            - smoothstep(psiMax2*(adjustedPixel+yResolution1),
+                                                         psiMax2*(adjustedPixel+1.5*yResolution1),
+                                                         absPsi2));
+        }
+        
+         @vertex
+         fn vs_main(@location(0) inPos: vec3<f32>) -> @builtin(position) vec4f
+         {
+            return vec4(inPos, 1.0);
+         }
+    `;
 
-    gl.useProgram(program);
+    this.#rendererShaderModule = this.#device.createShaderModule({
+      label: 'Schrodinger renderer shader',
+      code: rendererShader
+    });
 
-    gl.uniform4fv(colorHandle, new Float32Array(color));
-    gl.uniform1f(psiMaxHandle, psiMax);
+    // A pair of triangles that cover the canvas in normalized device coordinates
+    const vertexData = new Float32Array([
+      -1.0,  1.0, 0.0, // upper left
+      -1.0, -1.0, 0.0, // lower left
+       1.0,  1.0, 0.0, // upper right
+       1.0, -1.0, 0.0  // lower right
+    ]);
+
+    this.#vertexBuffer = this.#device.createBuffer({
+      label: 'Position',
+      mappedAtCreation: true,
+      size: vertexData.byteLength,
+      usage: GPUBufferUsage.VERTEX
+    });
+
+    const vertexArrayBuffer = this.#vertexBuffer.getMappedRange();
+    new Float32Array(vertexArrayBuffer).set(vertexData);
+    this.#vertexBuffer.unmap();
+
+    this.#vertexBuffersDescriptor = [{
+      arrayStride: 3 * Float32Array.BYTES_PER_ELEMENT,
+      stepMode: 'vertex',
+      attributes: [{
+        shaderLocation: 0, // @location in shader
+        offset: 0,
+        format: 'float32x3'
+      }]
+    }];
+
+    this.#plotParametersBindGroupLayout = this.#device.createBindGroupLayout({
+      entries: [{
+        binding: 0,
+        visibility: GPUShaderStage.FRAGMENT,
+        buffer: {
+          type: "uniform"
+        }
+      }]
+    });
+
+    this.#plotParametersBuffer = this.#device.createBuffer({
+      label: 'Plot Parameters',
+      mappedAtCreation: true,
+      size: 4*Float32Array.BYTES_PER_ELEMENT // psiColor
+            + Float32Array.BYTES_PER_ELEMENT // psiMax
+            + Uint32Array.BYTES_PER_ELEMENT  // yResolution
+            + 8,                             // Required padding
+      usage: GPUBufferUsage.UNIFORM
+    });
+
+    // Get the raw array buffer for the mapped GPU buffer
+    const plotParametersArrayBuffer = this.#plotParametersBuffer.getMappedRange();
+
+    let bytesSoFar = 0;
+    new Float32Array(plotParametersArrayBuffer, bytesSoFar, 4).set(this.#psiColor);
+    bytesSoFar += 4*Float32Array.BYTES_PER_ELEMENT;
+    new Float32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#psiMax]);
+    bytesSoFar += Float32Array.BYTES_PER_ELEMENT;
+    new Uint32Array(plotParametersArrayBuffer, bytesSoFar, 1).set([this.#yResolution]);
+
+
+    this.#plotParametersBuffer.unmap();
+
+    this.#plotParametersBindGroup = this.#device.createBindGroup({
+      layout: this.#plotParametersBindGroupLayout,
+      entries: [
+        {
+          binding: 0,
+          resource: {
+            buffer: this.#plotParametersBuffer
+          }
+        }
+      ]});
+
+    // Get a WebGPU context from the canvas and configure it
+    const canvas = document.getElementById(this.#canvasID);
+    this.#webGPUContext = canvas.getContext('webgpu');
+    // This will be either rgba8unorm or bgra8unorm
+    this.#presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+    this.#webGPUContext.configure({
+      device: this.#device,
+      format: this.#presentationFormat,
+      alphaMode: 'premultiplied'
+    });
+
+    return this;
   }
 
   /**
-   * Map the waveFunction texture onto a curve
+   * Render a wave function buffer from the schrodinger simulation.
    *
-   * @param waveFunction {WebGLTexture} A xResolution by 1 texture containing the real
-   *                                    and imaginary parts of the wave function.
+   * @param {GPUBuffer } waveFunctionBuffer
    */
-  this.show = function(waveFunction)
+  render(waveFunctionBuffer)
   {
-    var blending;
-    var gl;
+    const waveFunctionBindGroupLayout = this.#device.createBindGroupLayout({
+      label: "Wave function layout",
+      entries: [{
+        binding: 0,
+        visibility: GPUShaderStage.FRAGMENT,
+        buffer: {
+          type: "read-only-storage"
+        }
+      }]
+    });
 
-    gl = gpgpUtility.getRenderingContext();
+    const waveFunctionBindGroup = this.#device.createBindGroup({
+      layout: waveFunctionBindGroupLayout,
+      entries: [{
+        binding: 0,
+        resource: {
+          buffer: waveFunctionBuffer
+        }
+      }]
+    });
 
-    gl.useProgram(program);
+    const pipelineLayout = this.#device.createPipelineLayout({
+      bindGroupLayouts: [
+        this.#parametersBindGroupLayout,     // Simulation parameters
+        this.#plotParametersBindGroupLayout, // Plot parameters
+        waveFunctionBindGroupLayout          // The wave function values
+      ]
+    });
 
-    blending = gl.isEnabled(gl.BLEND);
-    if (!blending)
-    {
-      gl.enable(gl.BLEND);
-    }
+    const pipeline = this.#device.createRenderPipeline({
+      label: 'Render triangles to cover the rectangular canvas.',
+      layout: pipelineLayout,
+      primitive: {
+        topology: "triangle-strip",
+      },
+      vertex: {
+        module: this.#rendererShaderModule,
+        entryPoint: 'vs_main',
+        buffers: this.#vertexBuffersDescriptor
+      },
+      fragment: {
+        module: this.#rendererShaderModule,
+        entryPoint: 'fs_main',
+        targets: [{
+          format: this.#presentationFormat
+        }]
+      }
+    });
 
-    // This time we will render to the screen
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const commandEncoder = this.#device.createCommandEncoder();
 
-    gpgpUtility.getStandardVertices();
+    const passEncoder = commandEncoder.beginRenderPass({
+      colorAttachments: [{
+        view: this.#webGPUContext.getCurrentTexture().createView(),
+        loadOp: 'clear',
+        clearValue: [0.0, 0.0, 0.0, 0.0],
+        storeOp: 'store',
+      }]
+    });
+    passEncoder.setPipeline(pipeline);
+    passEncoder.setBindGroup(0, this.#parametersBindGroup);
+    passEncoder.setBindGroup(1, this.#plotParametersBindGroup);
+    passEncoder.setBindGroup(2, waveFunctionBindGroup);
+    passEncoder.setVertexBuffer(0, this.#vertexBuffer);
+    passEncoder.draw(4);
+    passEncoder.end();
 
-    gl.vertexAttribPointer(positionHandle,     3, gl.FLOAT, gl.FALSE, 20, 0);
-    gl.vertexAttribPointer(textureCoordHandle, 2, gl.FLOAT, gl.FALSE, 20, 12);
-
-    gl.uniform1i(yResolutionHandle, yResolution);
-
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, waveFunction);
-    gl.uniform1i(waveFunctionHandle, 0);
-
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-    if (!blending)
-    {
-      gl.disable(gl.BLEND);
-    }
+    const commandBuffer = commandEncoder.finish();
+    this.#device.queue.submit([commandBuffer]);
   }
-
-  color        = color_;
-  gpgpUtility  = gpgpUtility_;
-  xResolution  = xResolution_;
-  yResolution  = yResolution_;
-  parent       = parent_;
-  psiMax       = psiMax_;
-
-  program      = this.createProgram(gpgpUtility.getGLContext());
-  this.setup(gpgpUtility, color, psiMax);
-
 }
+
+export {SchrodingerResults}

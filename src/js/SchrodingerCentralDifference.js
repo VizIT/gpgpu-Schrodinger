@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 Vizit Solutions
+ * Copyright 2025 Vizit Solutions
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -13,226 +13,531 @@
  *    See the License for the specific language governing permissions and
  *    limitations under the License.
  */
-function Schrodinger(gpgpUtility_, xResolution_, length_, dt_)
+import {WebGPUCompute} from "./WebGPUCompute.js";
+
+/**
+ * @typedef {Number} Integer
+ */
+
+/**
+ * An FDTD time evolver for the Schrödinger wave function.
+ *
+ * @property {GPUDevice} #device The device as retrieved from the adaptor.
+ * @property {Number} #dt The time step between the wave function and its updated version.
+ * @property {Number} #length The physical length of this simulation.
+ * @property {Integer} #xResolution The number of spatial steps in the wave function representation.
+ * @property {Boolean} #running Whether the simulation is allowed to run. Setting this to false halts the simulation.
+ * @property {Array<Number>} #potential An array of potential values, array elements correspond to physical locations
+ *                                      just as the wave function arrays.
+ * @property {GPUBuffer} #parametersBuffer The FDTD parameters buffer.
+ * @property {GPUBindGroup} #parametersBindGroup The bind group for the parameters buffer.
+ * @property {GPUBindGroupLayout} #parametersBindGroupLayout The bind group layout for the simulation parameters.
+ * @property {GPUBuffer} #waveFunctionBuffer0 One of three wave function buffers.
+ * @property {GPUBuffer} #waveFunctionBuffer1 One of three wave function buffers.
+ * @property {GPUBuffer} #waveFunctionBuffer2 One of three wave function buffers.
+ * @property {GPUBindGroup[]} #waveFunctionBindGroup A set of bind groups, used to cycle through the wave function buffers.
+ * @property {GPUComputePipeline} #computePipeline The compute pipeline controlling some aspects of the shader execution.
+ * @property {Boolean} #debug A flag indicating whether this is a debugging instance.
+ */
+class Schrodinger
 {
-  "use strict";
-
-  var dt;
-  var dtHandle;
-  var fbos;
-  /** WebGLRenderingContext */
-  var gl;
-  var gpgpUtility;
-  var length;
-  var lengthHandle;
-  /** The wave function at t - delta t */
-  var oldWaveFunctionHandle;
-  var pixels;
-  var positionHandle;
-  var potential;
-  var potentialHandle;
-  var program;
-  // Whether this is a zero or one step - determined which texture is the source, which is rendered to.
-  var step;
-  var textureCoordHandle;
-  var textures;
-  /** The wave function at t */
-  var waveFunctionHandle;
-  var xResolution;
-  var xResolutionHandle;
+  #device;
+  #dt;
+  #length;
+  #xResolution;
+  #potential;
+  #running;
+  #parametersBuffer;
+  #parametersBindGroup;
+  #parametersBindGroupLayout;
+  #waveFunctionBuffer0;
+  #waveFunctionBuffer1;
+  #waveFunctionBuffer2;
+  #waveFunctionBindGroup = new Array(3);
+  #computePipeline;
+  #debug;
 
   /**
-   * Compile shaders and link them into a program, then retrieve references to the
-   * attributes and uniforms. The standard vertex shader, which simply passes on the
-   * physical and texture coordinates, is used.
+   * Build a Schrödinger equation integrator with the given parameters.
    *
-   * @returns {WebGLProgram} The created program object.
-   * @see {https://www.khronos.org/registry/webgl/specs/1.0/#5.6|WebGLProgram}
+   * @param {Number}        dt          The Δt between iterations of the wave function in natural units of time.
+   * @param {Integer}       xResolution The size of the wave function arrays, the number of spatial steps
+   *                                    on our 1D grid.
+   * @param {Number}        length      The characteristic length for the problem in terms of natural units.
+   * @param {Array<Number>} potential   An array of potential values, array elements correspond to physical locations
+   *                                    just as the wave function arrays.
+   * @param {Boolean}       debug       The debug option for this execution of the FDTD solver. Enabling this
+   *                                    makes the wave function buffers copyable, potentially having a
+   *                                    performance impact. Defaults to false.
    */
-  this.createProgram = function (gl)
+  constructor(dt, xResolution, length, potential, debug=false)
   {
-    var fragmentShaderSource;
-    var program;
-
-    // Note that the preprocessor requires the newlines.
-    fragmentShaderSource = "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
-                         + "precision highp float;\n"
-                         + "#else\n"
-                         + "precision mediump float;\n"
-                         + "#endif\n"
-                         + ""
-                         // The delta-t for each timestep.
-                         + "uniform float dt;"
-                         // The physical length of the grid in nm.
-                         + "uniform float length;"
-                         // At time t - delta t waveFunction.r is the real part waveFunction.g is the imaginary part.
-                         + "uniform sampler2D oldWaveFunction;"
-                         // The number of points along the x-axis.
-                         + "uniform int xResolution;"
-                         + ""
-                         // At time t waveFunction.r is the real part waveFunction.g is the imaginary part.
-                         + "uniform sampler2D waveFunction;"
-                         // Discrete representation of the potential function.
-                         + "uniform sampler2D potential;"
-                         + ""
-                         // Vector to mix the real and imaginary parts in the wave function update.
-                         + "const vec2 mixing = vec2(-1.0, +1.0);"
-                         + ""
-                         + "varying vec2 vTextureCoord;"
-                         + ""
-                         + "void main()"
-                         + "{"
-                         + "  float dx;"
-                         + "  vec2  ds;"
-                         + "  vec4  value;"
-                         + ""
-                         + "  dx    = length/float(xResolution);"
-                         + "  ds    = vec2(1.2/float(xResolution), 0.0);"
-                         + "  value = texture2D(waveFunction, vTextureCoord);"
-                         + ""
-                         + "  gl_FragColor.rg =  texture2D(oldWaveFunction, vTextureCoord).rg"
-                         + "                     + ((texture2D(waveFunction, vTextureCoord+ds).gr"
-                         + "                                  - 2.0*value.gr"
-                         + "                                  + texture2D(waveFunction, vTextureCoord-ds).gr)/(dx*dx)"
-                         + "                        - 2.0*texture2D(potential, vTextureCoord).r*value.gr)*mixing*dt;"
-                         + "}";
-
-    program               = gpgpUtility.createProgram(null, fragmentShaderSource);
-    positionHandle        = gpgpUtility.getAttribLocation(program,  "position");
-    gl.enableVertexAttribArray(positionHandle);
-    textureCoordHandle    = gpgpUtility.getAttribLocation(program,  "textureCoord");
-    gl.enableVertexAttribArray(textureCoordHandle);
-    dtHandle              = gl.getUniformLocation(program, "dt");
-    oldWaveFunctionHandle = gl.getUniformLocation(program, "oldWaveFunction");
-    potentialHandle       = gl.getUniformLocation(program, "potential");
-    waveFunctionHandle    = gl.getUniformLocation(program, "waveFunction");
-    xResolutionHandle     = gl.getUniformLocation(program, "xResolution");
-    lengthHandle          = gl.getUniformLocation(program, "length");
-
-    return program;
-  };
-
-  /**
-   * Set up the initial values for textures. Two for values of the wave function,
-   * and a third as a render target.
-   */
-  this.setInitialTextures = function(texture0, texture1, texture2)
-  {
-    textures[0] = texture0;
-    fbos[0]     = gpgpUtility.attachFrameBuffer(texture0);
-    textures[1] = texture1;
-    fbos[1]     = gpgpUtility.attachFrameBuffer(texture1);
-    textures[2] = texture2;
-    fbos[2]     = gpgpUtility.attachFrameBuffer(texture2);
+    this.#dt = dt;
+    this.#xResolution = xResolution;
+    this.#length = length;
+    this.#potential = potential;
+    this.#debug = debug;
   }
 
   /**
-   * Set the potential as a texture
-   */
-  this.setPotential = function(texture)
-  {
-    potential = texture;
-  }
-
-  /**
-   * Runs the program to do the actual work. On exit the framebuffer &amp;
-   * texture are populated with the next timestep of the wave function.
-   * You can use gl.readPixels to retrieve texture values.
-   */
-  this.timestep = function()
-  {
-    var gl;
-
-    gl = gpgpUtility.getComputeContext();
-
-    gl.useProgram(program);
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[(step+2)%3]);
-
-    gpgpUtility.getStandardVertices();
-
-    gl.vertexAttribPointer(positionHandle,     3, gl.FLOAT, gl.FALSE, 20, 0);
-    gl.vertexAttribPointer(textureCoordHandle, 2, gl.FLOAT, gl.FALSE, 20, 12);
-
-    gl.uniform1f(dtHandle,          dt);
-    gl.uniform1i(xResolutionHandle, xResolution);
-    gl.uniform1f(lengthHandle,      length);
-
-    // This texture is bound in the renderer setup, uncomment if it needs to be bound here.
-    //gl.activeTexture(gl.TEXTURE0);
-    //gl.bindTexture(gl.TEXTURE_2D, potential);
-    //gl.uniform1i(potentialHandle, 0);
-
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, textures[step]);
-    gl.uniform1i(oldWaveFunctionHandle, 1);
-
-    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, textures[(step+1)%3]);
-    gl.uniform1i(waveFunctionHandle, 2);
-
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-    // Step cycles though 0, 1, 2
-    // Cycle over old, current and render target uses of textures
-    step = (step+1)%3;
-  };
-
-  /**
-   * Retrieve the most recently rendered to texture.
+   * Get the time step between wave function instances for FDTD time evolution.
    *
-   * @returns {WebGLTexture} The texture used as the rendering target in the most recent
-   *                         timestep.
+   * @returns {Number} The FDTD time step.
    */
-  this.getRenderedTexture = function()
+  getTimeStep()
   {
-      return textures[(step+1)%3];
+    return this.#dt;
   }
 
   /**
-   * Retrieve the two frambuffers that wrap the textures for the old and current wavefunctions in the
-   * next timestep. Render to these FBOs in the initialization step.
+   * Set the FDTD time step.
    *
-   * @returns {WebGLFramebuffer[]} The framebuffers wrapping the source textures for the next timestep.
+   * @param {Number} dt The new time step between the wave function and its updated version.
+   * @returns {Schrodinger}
    */
-  this.getSourceFramebuffers = function()
+  setTimeStep(dt)
   {
-    var value = [];
-    value[0] = fbos[step];
-    value[1] = fbos[(step+1)%3];
-    return value;
+    this.#dt = dt;
+    return this;
   }
 
   /**
-   * Retrieve the two textures for the old and current wave functions in the next timestep.
-   * Fill these with initial values for the wave function.
+   * Get the number of array elements, or the number of spatial steps, in the wave function representation.
    *
-   * @returns {WebGLTexture[]} The source textures for the next timestep.
+   * @returns {Number} The number of spatial steps in the wave function representation.
    */
-  this.getSourceTextures     = function()
+  getXResolution()
   {
-    var value = [];
-    value[0] = textures[step];
-    value[1] = textures[(step+1)%3];
-    return value;
+    return this.#xResolution;
   }
 
   /**
-   * Invoke to clean up resources specific to this program. We leave the texture
-   * and frame buffer intact as they are used in follow-on calculations.
+   * Set the number of array elements, or the number of spatial steps, in the wave function representation.
+   *
+   * @param {Integer} xResolution The number of spatial steps in the wave function representation.
+   * @returns {Schrodinger} This object with the new resolution set.
    */
-  this.done = function ()
+  setXResolution(xResolution)
   {
-    gl.deleteProgram(program);
-  };
+    this.#xResolution = xResolution;
+    return this;
+  }
 
-  dt          = dt_;
-  gpgpUtility = gpgpUtility_;
-  gl          = gpgpUtility.getGLContext();
-  program     = this.createProgram(gl);
-  fbos        = new Array(2);
-  length      = length_;
-  textures    = new Array(2);
-  step        = 0;
-  xResolution = xResolution_;
+  /**
+   * Get the physical length of this simulation.
+   *
+   * @returns {Number} The physical length of this simulation.
+   */
+  getLength()
+  {
+    return this.#length
+  }
+
+  /**
+   * Get the physical length of this simulation.
+   *
+   * @param {Number} length The physical length of this simulation.
+   * @returns {Schrodinger}
+   */
+  setLength(length)
+  {
+    this.#length = length;
+    return this;
+  }
+
+  /**
+   * Get the potential on our grid.
+   *
+   * @returns {Array<Number>} An array of potential values on our grid.
+   */
+  getPotential()
+  {
+    return this.#potential;
+  }
+
+  /**
+   * Set the potential, V(x), used in the Schrödinger equation.
+   *
+   * @param {Array<Number>} potential An array of potential values on our grid.
+   * @returns {Schrodinger}
+   */
+  setPotential(potential)
+  {
+    this.#potential = potential;
+    return this;
+  }
+
+  /**
+   * Get the bind group for the wave function parameters in the wave equation.
+   *
+   * @returns {GPUBindGroup} The bind group for the parameters buffer.
+   * @see getParametersBindGroupLayout
+   */
+  getParametersBindGroup()
+  {
+    return this.#parametersBindGroup;
+  }
+
+  /**
+   * Get the bind group layout for the schrodinger solver parameters.
+   *
+   * @returns {GPUBindGroupLayout} The bind group layout for the simulation parameters.
+   * @see getParametersBindGroup
+   */
+  getParametersBindGroupLayout()
+  {
+    return this.#parametersBindGroupLayout;
+  }
+
+  /**
+   * Get a wave function buffer for display, or debugging.
+   *
+   * @returns {GPUBuffer} A wave function buffer.
+   */
+  getWaveFunctionBuffer0()
+  {
+    return this.#waveFunctionBuffer0;
+  }
+
+  /**
+   * Get a wave function buffer for display or debugging.
+   *
+   * @returns {GPUBuffer} A wave function buffer.
+   */
+  getWaveFunctionBuffer1()
+  {
+    return this.#waveFunctionBuffer1;
+  }
+
+  /**
+   * Get a wave function buffer for display or debugging.
+   *
+   * @returns {GPUBuffer} A wave function buffer.
+   */
+  getWaveFunctionBuffer2()
+  {
+    return this.#waveFunctionBuffer2;
+  }
+
+  /**
+   * Get the FDTD parameters buffer for display or debugging.
+   *
+   * @returns {GPUBuffer} The FDTD parameters buffer.
+   */
+  getParametersBuffer()
+  {
+    return this.#parametersBuffer;
+  }
+
+  /**
+   * Get the device we obtain resources from. Allows other classes to share resources.
+   *
+   * @returns {GPUDevice} The device in use for this simulation.
+   */
+  getDevice()
+  {
+    return this.#device;
+  }
+
+  /**
+   * Async initialization of the object. JS does not allow async constructors, so the async initialization is here.
+   * Invoke immediately after the constructor for a properly initialized object. Or get the object through
+   * {@link getInstance}.
+   *
+   * @returns {Promise<Schrodinger>} A promise that resolves to the Schrodinger object.
+   * @see getInstance
+   */
+  async init()
+  {
+    const timeStepShader = `
+    struct Parameters {
+        dt: f32,              // The time step, Δt.
+        xResolution: u32,     // The number of points along the x-axis, the number of elements in the array.
+        length: f32,          // The physical length for our simulation.
+        potential: array<f32> // The potential the particle moves through.
+    }
+
+    // group 0, things that never change within a simulation.
+    // The parameters for the simulation
+    @group(0) @binding(0) var<storage, read> parameters: Parameters;
+  
+    // Group 1, changes on each iteration
+    // Older wave function at t-Δt.
+    @group(1) @binding(0) var<storage, read> oldWaveFunction : array<vec2f>;
+    // Current wave function at t.
+    @group(1) @binding(1) var<storage, read> waveFunction : array<vec2f>;
+    // The updated wave function at t+Δt.
+    @group(1) @binding(2) var<storage, read_write> updatedWaveFunction : array<vec2f>;
+  
+    @compute @workgroup_size(64)
+    fn timeStep(@builtin(global_invocation_id) global_id : vec3u)
+    {
+      let index = global_id.x;
+      // Skip invocations when work groups exceed the actual problem size
+      if (index >= parameters.xResolution) {
+        return;
+      }
+      // The potential and the wave function arrays have the same size.
+      let dx = parameters.length / f32(parameters.xResolution-1);
+      let dx2 = dx*dx;
+      
+      let twoV = 2.0*parameters.potential[index];
+      let oldWaveFunctionAtX = oldWaveFunction[index];
+      let waveFunctionAtX = waveFunction[index];
+      let waveFunctionAtXPlusDx = waveFunction[min(index+1, parameters.xResolution-1)];
+      let waveFunctionAtXMinusDx = waveFunction[max(index-1, 0)];
+    
+      updatedWaveFunction[index].x = oldWaveFunctionAtX.x
+                                    - ((waveFunctionAtXPlusDx.y - 2.0*waveFunctionAtX.y + waveFunctionAtXMinusDx.y)
+                                        / dx2 - twoV*waveFunctionAtX.y) * parameters.dt;
+
+      updatedWaveFunction[index].y = oldWaveFunctionAtX.y
+                                        + ((waveFunctionAtXPlusDx.x - 2.0*waveFunctionAtX.x + waveFunctionAtXMinusDx.x)
+                                            / dx2 - twoV*waveFunctionAtX.x) * parameters.dt;
+    }
+  `;
+
+    const webgpuCompute = new WebGPUCompute();
+    this.#device = await webgpuCompute.getDevice();
+
+    const timeStepShaderModule = this.#device.createShaderModule({
+      label: 'Schrodinger time step shader',
+      code: timeStepShader
+    });
+
+    this.#parametersBindGroupLayout = this.#device.createBindGroupLayout({
+      label: "Simulation parameters",
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.COMPUTE | GPUShaderStage.FRAGMENT,
+          buffer: {
+            type: "read-only-storage"
+          }
+        }
+      ]
+    });
+
+    const waveFunctionBindGroupLayout = this.#device.createBindGroupLayout({
+      label: "Wave function data.",
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: {
+            type: "read-only-storage"
+          }
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: {
+            type: "read-only-storage"
+          }
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: {
+            type: "storage"
+          }
+        }
+      ]
+    });
+
+    this.#computePipeline = this.#device.createComputePipeline({
+        layout: this.#device.createPipelineLayout({
+        bindGroupLayouts: [this.#parametersBindGroupLayout, waveFunctionBindGroupLayout]
+      }),
+      compute: {
+        module: timeStepShaderModule,
+        entryPoint: "timeStep"
+      }
+    });
+
+    this.#parametersBuffer = this.#device.createBuffer({
+      label: "Parameters buffer",
+      mappedAtCreation: true,
+      size: Float32Array.BYTES_PER_ELEMENT                    // dt
+          + Uint32Array.BYTES_PER_ELEMENT                     // xResolution
+          + Float32Array.BYTES_PER_ELEMENT                    // length
+          + this.#xResolution*Float32Array.BYTES_PER_ELEMENT, // potential
+      usage:  this.#debug ? GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC : GPUBufferUsage.STORAGE
+            // How we use this buffer, in the debug case we copy it to another buffer for reading
+    });
+
+    // Get the raw array buffer for the mapped GPU buffer
+    const parametersArrayBuffer = this.#parametersBuffer.getMappedRange();
+
+    let bytesSoFar = 0;
+    new Float32Array(parametersArrayBuffer, bytesSoFar, 1).set([this.#dt]);
+    bytesSoFar += Float32Array.BYTES_PER_ELEMENT;
+    new Uint32Array(parametersArrayBuffer, bytesSoFar, 1).set([this.#xResolution]);
+    bytesSoFar += Uint32Array.BYTES_PER_ELEMENT;
+    new Float32Array(parametersArrayBuffer, bytesSoFar, 1).set([this.#length]);
+    bytesSoFar += Float32Array.BYTES_PER_ELEMENT;
+    if (this.#potential) {
+      new Float32Array(parametersArrayBuffer, bytesSoFar, this.#xResolution).set(this.#potential);
+    }
+
+    // Unmap the buffer returning ownership to the GPU.
+    this.#parametersBuffer.unmap();
+
+    this.#parametersBindGroup = this.#device.createBindGroup({
+      layout: this.#parametersBindGroupLayout,
+      entries: [
+        {
+          binding: 0,
+          resource: {
+            buffer: this.#parametersBuffer
+          }
+        }
+      ]
+    });
+
+    // Wave function representations
+    this.#waveFunctionBuffer0 = this.#device.createBuffer({
+      label: "Wave function 0",
+      size: 2*this.#xResolution*Float32Array.BYTES_PER_ELEMENT,
+      usage: this.#debug ? GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC : GPUBufferUsage.STORAGE
+    });
+
+    this.#waveFunctionBuffer1 = this.#device.createBuffer({
+      label: "Wave function 1",
+      size: 2*this.#xResolution*Float32Array.BYTES_PER_ELEMENT,
+      usage: this.#debug ? GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC : GPUBufferUsage.STORAGE
+    });
+
+    this.#waveFunctionBuffer2 = this.#device.createBuffer({
+      label: "Wave function 2",
+      size: 2*this.#xResolution*Float32Array.BYTES_PER_ELEMENT,
+      usage: this.#debug ? GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC : GPUBufferUsage.STORAGE
+    });
+
+    this.#waveFunctionBindGroup[0] = this.#device.createBindGroup({
+      layout: waveFunctionBindGroupLayout,
+      entries: [
+        {
+          binding: 0,
+          resource: {
+            buffer: this.#waveFunctionBuffer0
+          }
+        },
+        {
+          binding: 1,
+          resource: {
+            buffer: this.#waveFunctionBuffer1
+          }
+        },
+        {
+          binding: 2,
+          resource: {
+            buffer: this.#waveFunctionBuffer2
+          }
+        }
+      ]
+    });
+
+    this.#waveFunctionBindGroup[1] = this.#device.createBindGroup({
+      layout: waveFunctionBindGroupLayout,
+      entries: [
+        {
+          binding: 0,
+          resource: {
+            buffer:  this.#waveFunctionBuffer1
+          }
+        },
+        {
+          binding: 1,
+          resource: {
+            buffer: this.#waveFunctionBuffer2
+          }
+        },
+        {
+          binding: 2,
+          resource: {
+            buffer: this.#waveFunctionBuffer0
+          }
+        }
+      ]});
+
+    this.#waveFunctionBindGroup[2] = this.#device.createBindGroup({
+      layout: waveFunctionBindGroupLayout,
+      entries: [
+        {
+          binding: 0,
+          resource: {
+            buffer:  this.#waveFunctionBuffer2
+          }
+        },
+        {
+          binding: 1,
+          resource: {
+            buffer: this.#waveFunctionBuffer0
+          }
+        },
+        {
+          binding: 2,
+          resource: {
+            buffer: this.#waveFunctionBuffer1
+          }
+        }
+      ]});
+
+    return this;
+  }
+
+  /**
+   * Get an initialized instance of a Schrödinger equation integrator with the given parameters.
+   *
+   * @param {Number}        dt          The Δt between iterations of the wave function in natural units of time.
+   * @param {Integer}       xResolution The size of the wave function arrays, the number of spatial steps
+   *                                    on our 1D grid.
+   * @param {Number}        length      The characteristic length for the problem in terms of natural units.
+   * @param {Array<Number>} potential   An array of potential values, array elements correspond to physical locations
+   *                                    just as the wave function arrays.
+   * @param {Boolean}       debug       The debug option for this execution of the FDTD solver. Enabling this
+   *                                    makes the wave function buffers copyable, potentially having a
+   *                                    performance impact. Defaults to false.
+   * @return Promise<Schrodinger> A promise that resolves to the requested Schrodinger instance.
+   * @see #init
+   */
+  static async getInstance(dt, xResolution, length, potential, debug=false){
+    const schrodinger = new Schrodinger(dt, xResolution, length, potential, debug);
+    return schrodinger.init();
+  }
+
+  stop()
+  {
+    this.#running = false;
+  }
+
+  /**
+   * Execute count iterations of the simulation.
+   *
+   * @param {Integer} count The number of iterations to carry out. It is strongly suggested that this be
+   * a multiple of 3.
+   */
+  step(count=21)
+  {
+    this.#running = true;
+
+    // Recreate this because it can not be reused after finish is invoked.
+    const commandEncoder = this.#device.createCommandEncoder();
+    const workgroupCountX = Math.ceil(this.#xResolution / 64);
+    const passEncoder = commandEncoder.beginComputePass();
+    passEncoder.setPipeline(this.#computePipeline);
+    passEncoder.setBindGroup(0, this.#parametersBindGroup);
+    for (let i=0; i<count && this.#running; i++)
+    {
+      passEncoder.setBindGroup(1, this.#waveFunctionBindGroup[i%3]);
+      passEncoder.dispatchWorkgroups(workgroupCountX);
+    }
+    passEncoder.end();
+    // Submit GPU commands.
+    const gpuCommands = commandEncoder.finish();
+    this.#device.queue.submit([gpuCommands]);
+  }
 }
+
+export {Schrodinger}

@@ -130,7 +130,8 @@ class SchrodingerInitializer
         @group(1) @binding(0) var<storage, read> wavePacketParameters : WavePacketParameters;
         
         // Initial wave function at t=0.
-        @group(2) @binding(0) var<storage, read_write> waveFunction : array<vec2f>;
+        @group(2) @binding(0) var<storage, read_write> waveFunction0 : array<vec2f>;
+        @group(2) @binding(1) var<storage, read_write> waveFunction1 : array<vec2f>;
                          
         fn computePsi(globalID: u32) -> vec2f
         {
@@ -153,7 +154,8 @@ class SchrodingerInitializer
             if (index >= parameters.xResolution) {
                 return;
             }
-            waveFunction[index] = computePsi(index);
+            waveFunction0[index] = computePsi(index);
+            waveFunction1[index] = waveFunction0[index];
         }
     `;
 
@@ -213,6 +215,13 @@ class SchrodingerInitializer
           buffer: {
             type: "storage"
           }
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: {
+            type: "storage"
+          }
         }
       ]
     });
@@ -254,12 +263,12 @@ class SchrodingerInitializer
   }
 
   /**
-   * Runs the compute shader. On exit the buffer is populated with the values
-   * computed in the shader.
+   * Runs the compute shader. On exit the buffers are populated with the initial wave function values.
    *
-   * @param {GPUBuffer} waveFunctionBuffer Data buffer to be initialized.
+   * @param {GPUBuffer} waveFunctionBuffer0 Data buffer to be initialized.
+   * @param {GPUBuffer} waveFunctionBuffer1 Data buffer to be initialized.
    */
-  initialize(waveFunctionBuffer)
+  initialize(waveFunctionBuffer0, waveFunctionBuffer1)
   {
     const waveFunctionBindGroup = this.#device.createBindGroup({
       layout: this.#waveFunctionBindGroupLayout,
@@ -267,7 +276,13 @@ class SchrodingerInitializer
         {
           binding: 0,
           resource: {
-            buffer: waveFunctionBuffer
+            buffer: waveFunctionBuffer0
+          }
+        },
+        {
+          binding: 1,
+          resource: {
+            buffer: waveFunctionBuffer1
           }
         }
       ]});
@@ -294,48 +309,6 @@ class SchrodingerInitializer
   done()
   {
 
-  };
-
-
-
-  /**
-   * Read back the i, j pixel and compare it with the expected value. The expected value
-   * computation matches that in the fragment shader.
-   * 
-   * @param i {integer} the i index of the matrix.
-   * @param j {integer} the j index of the matrix.
-   */
-  test(i, j)
-  {
-    var buffer;
-    var eps;
-    var expected;
-    var passed;
-
-    // Error tollerance in calculations
-    eps = 1.0E-20;
-
-    // One each for RGBA component of a pixel
-    buffer = new Float32Array(4);
-/*    // Read a 1x1 block of pixels, a single pixel
-    gl.readPixels(i,       // x-coord of lower left corner
-                  j,       // y-coord of lower left corner
-                  1,       // width of the block
-                  1,       // height of the block
-                  gl.RGBA, // Format of pixel data.
-                  gl.FLOAT,// Data type of the pixel data, must match makeTexture
-                  buffer); // Load pixel data into buffer
-
-    expected = i*1000.0 + j;
-
-    passed   = expected === 0.0 ? buffer[0] < eps : Math.abs((buffer[0] - expected)/expected) < eps;
-
-    if (!passed)
-    {
-	alert("Read " + buffer[0] + " at (" + i + ", " + j + "), expected " + expected + ".");
-    }
-
-    return passed;*/
   };
 }
 
