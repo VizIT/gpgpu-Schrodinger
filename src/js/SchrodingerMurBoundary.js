@@ -38,6 +38,8 @@ import {WebGPUCompute} from "./WebGPUCompute.js";
  * @property {GPUBuffer} #waveFunctionBuffer2 One of three wave function buffers.
  * @property {GPUBindGroup[]} #waveFunctionBindGroup A set of bind groups, used to cycle through the wave function buffers.
  * @property {GPUComputePipeline} #computePipeline The compute pipeline controlling some aspects of the shader execution.
+ * @property {Boolean} #bcEnabled Whether to invoke the boundary value computations.
+ * @property {MurBoundary} #boundary A MurBoundary instance, or similar boundary value class.
  * @property {Boolean} #debug A flag indicating whether this is a debugging instance.
  */
 class Schrodinger
@@ -185,6 +187,7 @@ class Schrodinger
   setBoundary(boundary)
   {
     this.#boundary = boundary;
+    return this;
   }
 
   /**
