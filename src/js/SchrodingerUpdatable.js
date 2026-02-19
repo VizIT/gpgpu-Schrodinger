@@ -60,6 +60,7 @@ class Schrodinger
   #waveFunctionBuffer2;
   #waveFunctionBindGroup = new Array(3);
   #computePipeline;
+  #nsteps;
   // True if we have already been initialized, shader compiled, parameters loaded, etc.
   #initialized = false;
   #debug;
@@ -83,6 +84,7 @@ class Schrodinger
     this.#xResolution = xResolution;
     this.#length = length;
     this.#potential = potential;
+    this.#nsteps = 0;
     this.#debug = debug;
   }
 
@@ -270,6 +272,7 @@ class Schrodinger
     const float32Data = new Float32Array(data);
     this.#device.queue.writeBuffer(this.#waveFunctionBuffer0, 0, float32Data, 0, 2*this.#xResolution);
     this.#device.queue.writeBuffer(this.#waveFunctionBuffer1, 0, float32Data, 0, 2*this.#xResolution);
+    this.#nsteps = 0;
   }
 
   /**
@@ -571,8 +574,9 @@ class Schrodinger
     passEncoder.setBindGroup(0, this.#parametersBindGroup);
     for (let i=0; i<count && this.#running; i++)
     {
-      passEncoder.setBindGroup(1, this.#waveFunctionBindGroup[i%3]);
+      passEncoder.setBindGroup(1, this.#waveFunctionBindGroup[this.#nsteps%3]);
       passEncoder.dispatchWorkgroups(workgroupCountX);
+      this.#nsteps++;
     }
     passEncoder.end();
     // Submit GPU commands.

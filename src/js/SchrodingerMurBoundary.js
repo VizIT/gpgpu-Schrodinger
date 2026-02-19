@@ -38,6 +38,7 @@ import {WebGPUCompute} from "./WebGPUCompute.js";
  * @property {GPUBuffer} #waveFunctionBuffer2 One of three wave function buffers.
  * @property {GPUBindGroup[]} #waveFunctionBindGroup A set of bind groups, used to cycle through the wave function buffers.
  * @property {GPUComputePipeline} #computePipeline The compute pipeline controlling some aspects of the shader execution.
+ * @paoperty {Integer} #nsteps The number of timesteps taken so far.
  * @property {Boolean} #bcEnabled Whether to invoke the boundary value computations.
  * @property {MurBoundary} #boundary A MurBoundary instance, or similar boundary value class.
  * @property {Boolean} #debug A flag indicating whether this is a debugging instance.
@@ -63,6 +64,7 @@ class Schrodinger
   #waveFunctionBindGroups = new Array(3);
   #waveFunctionBindGroupLayout;
   #computePipeline;
+  #nsteps;
   // true => invoke boundary conditions - make sure boundary is set before setting this.
   #bcEnabled = false;
   // Renders the boundary at t+dt after the main t+dt rendering
@@ -88,6 +90,7 @@ class Schrodinger
     this.#xResolution = xResolution;
     this.#length = length;
     this.#potential = potential;
+    this.#nsteps = 0;
     this.#debug = debug;
   }
 
@@ -300,6 +303,7 @@ class Schrodinger
     const float32Data = new Float32Array(data);
     this.#device.queue.writeBuffer(this.#waveFunctionBuffer0, 0, float32Data, 0, 2*this.#xResolution);
     this.#device.queue.writeBuffer(this.#waveFunctionBuffer1, 0, float32Data, 0, 2*this.#xResolution);
+    this.#nsteps = 0;
   }
 
   /**
@@ -599,7 +603,7 @@ class Schrodinger
 
     for (let i=0; i<count && this.#running; i++)
     {
-      const waveFunctionBindGroup = this.#waveFunctionBindGroups[i%3];
+      const waveFunctionBindGroup = this.#waveFunctionBindGroups[this.#nsteps%3];
       const passEncoder = commandEncoder.beginComputePass();
       passEncoder.setPipeline(this.#computePipeline);
       passEncoder.setBindGroup(0, this.#parametersBindGroup);
@@ -610,6 +614,7 @@ class Schrodinger
       {
         this.#boundary.makeComputePass(commandEncoder, waveFunctionBindGroup);
       }
+      this.#nsteps++;
     }
 
     // Submit GPU commands.

@@ -34,6 +34,7 @@ import {WebGPUCompute} from "./WebGPUCompute.js";
  * @property {GPUBuffer} #waveFunctionBuffer1 One of two wave function buffers.
  * @property {GPUBindGroup[]} #waveFunctionBindGroup A pair of bind groups, used to ping pong the wave function buffers.
  * @property {GPUComputePipeline} #computePipeline The compute pipeline controlling some aspects of the shader execution.
+ * @property {Integer} #nsteps The number of ssteps in this simulation so far.
  * @property {Boolean} #debug A flag indicating whether this is a debugging instance.
  */
 class Schrodinger
@@ -50,6 +51,7 @@ class Schrodinger
   #waveFunctionBuffer1;
   #waveFunctionBindGroup = new Array(2);
   #computePipeline;
+  #nsteps;
   #debug;
 
   /**
@@ -68,6 +70,7 @@ class Schrodinger
     this.#dt = dt;
     this.#xResolution = xResolution;
     this.#length = length;
+    this.#nsteps = 0;
     this.#debug = debug;
   }
 
@@ -427,8 +430,9 @@ class Schrodinger
     passEncoder.setBindGroup(0, this.#parametersBindGroup);
     for (let i=0; i<count && this.#running; i++)
     {
-      passEncoder.setBindGroup(1, this.#waveFunctionBindGroup[i%2]);
+      passEncoder.setBindGroup(1, this.#waveFunctionBindGroup[this.#nsteps%2]);
       passEncoder.dispatchWorkgroups(workgroupCountX);
+      this.#nsteps++;
     }
     passEncoder.end();
     // Submit GPU commands.
