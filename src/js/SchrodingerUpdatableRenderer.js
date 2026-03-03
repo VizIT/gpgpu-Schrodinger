@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Vizit Solutions
+ * Copyright 2025-2026 Vizit Solutions
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -448,25 +448,26 @@ class SchrodingerRenderer
                        width: f32, value: f32, previousValue: f32) -> vec4f
          {
             // The total height runs from -scale to +scale
-            let scale2 = 2.0*scale;
+            //let scale2 = 2.0*scale;
+            let perPixel = 2.0*scale/f32(yResolution-1);
             let adjustedPixel = -fragY + (f32(yResolution-1)/2.0);
             // The function value for this pixel.
-            let pxValue = scale2*adjustedPixel/f32(yResolution);
+            let pxValue = perPixel*adjustedPixel;
             
             // Begin fading in the color at the function value
             // but adjust toward the previous value for continuity
-            let lowerEdge = min(value, previousValue+scale2/f32(yResolution));
+            let lowerEdge = min(value, previousValue+perPixel);
 
             // Begin fading out the color at the function value
             // but adjust toward the previous value for continuity
-            let upperEdge = max(value, previousValue-scale2/f32(yResolution));
+            let upperEdge = max(value, previousValue-perPixel);
 
             
-            return color*(smoothstep(lowerEdge - scale2*width/f32(yResolution),
-                                     lowerEdge - scale2/f32(yResolution),
+            return color*(smoothstep(lowerEdge - width*perPixel,
+                                     lowerEdge - perPixel,
                                      pxValue)
-                          -smoothstep(upperEdge + scale2/f32(yResolution),
-                                      upperEdge + scale2*width/f32(yResolution),
+                          -smoothstep(upperEdge + perPixel,
+                                      upperEdge + width*perPixel,
                                       pxValue));
          }
          
@@ -733,6 +734,24 @@ class SchrodingerRenderer
         const commandBuffer = commandEncoder.finish();
         this.#device.queue.submit([commandBuffer]);
     }
+
+  /**
+   * Capture the most recently rendered frame to a file with the given name. Each frame is expected to
+   * be captured to a different file. For example frame00001,png, frame00002.png, etc.
+   *
+   * @param {String} fileName The name of the file to contain the frame.
+   */
+  frameToFile(fileName) {
+    const psudoLink = document.createElement('a');
+    psudoLink.style.display = 'none';
+
+    const data = this.#canvas.toDataURL("image/png").replace("image/png", "image/octet-stream");
+    psudoLink.setAttribute('href', data);
+    psudoLink.setAttribute('download', fileName);
+    document.body.appendChild(psudoLink);
+    psudoLink.click();
+    document.body.removeChild(psudoLink);
+  }
 }
 
 export {SchrodingerRenderer}
